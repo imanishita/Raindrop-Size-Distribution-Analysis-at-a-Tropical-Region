@@ -126,8 +126,8 @@ $$
 
 ## Authors
 
-**Manishita Biswas**  
-**Anik Khajanchi**
+Manishita Biswas 
+Anik Khajanchi
 
 B.Tech – Electronics & Communication Engineering  
 University of Calcutta
