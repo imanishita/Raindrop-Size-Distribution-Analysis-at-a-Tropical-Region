@@ -116,8 +116,8 @@ N(D_i) = rac{n_i}{F \cdot t \cdot v(D_i) \cdot \Delta D_i}
 
 
 ```
-![DSD Curve](plots/DistributionCurve.png)
-![Rainfall Intensity Plot](plots/RainIntensityCurve.png)
+![DSD Curve](./plots/DistributionCurve.png)
+![Rainfall Intensity Plot](./plots/RainIntensityCurve.png)
 
 
 ```
