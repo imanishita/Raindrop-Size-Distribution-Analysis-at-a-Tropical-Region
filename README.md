@@ -102,9 +102,11 @@ $$
 │   ├── RD-*.txt
 │   ├── RD-*.csv
 ├── scripts/
-│   ├── convert_txt_to_csv.py
-│   ├── rainfall_intensity_comparison.py
-│   ├── dsd_distribution_plot.py
+│   ├── main.py
+│   ├── comparism.py.py
+│   ├── plotDistributionCurve.py
+|   ├── rainIntensity.py
+|   ├── rainIntensityReal.py
 ├── plots/
 │   ├── DistributionCurve.png
 │   ├── RainIntensityCurve.png
