@@ -57,14 +57,15 @@ The optical sensor detects drops passing through a laser beam, classifies them i
 ### ** Computing Parameters**
 
 ### **Rainfall Intensity (Formula-based)**  
-\[
-RI = rac{\pi}{6} \cdot rac{3.6 	imes 10^3}{F \cdot t} \sum n_i D_i^3
-\]
+$$
+RI = \frac{\pi}{6} \cdot \frac{3.6 \times 10^3}{F \cdot t} \sum_{i=1}^{20} n_i D_i^3
+$$
+
 
 ### **Drop Size Distribution N(D)**  
-\[
-N(D_i) = rac{n_i}{F \cdot t \cdot v(D_i) \cdot \Delta D_i}
-\]
+$$
+N(D_i) = \frac{n_i}{F \cdot t \cdot v(D_i) \cdot \Delta D_i}
+$$
 
 ### **Comparison**
 - Plot **RI (instrument)** vs **RI (formula-based)**
