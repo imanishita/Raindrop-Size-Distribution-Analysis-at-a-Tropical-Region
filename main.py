@@ -2,8 +2,8 @@ import pandas as pd
 import glob
 import os
 
-# Path to your folder (change if needed)
-path = "data/"   # e.g. "C:/Users/Manishita/Desktop/data/"
+
+path = "data/"   
 
 # Loop through all RD-*.txt files
 for file in glob.glob(os.path.join(path, "RD-*.txt")):
