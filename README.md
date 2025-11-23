@@ -136,5 +136,3 @@ If you found this useful, feel free to ⭐ the repository!
 
 ---
 
-## 📄 License  
-MIT License
