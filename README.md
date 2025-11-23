@@ -48,13 +48,13 @@ The optical sensor detects drops passing through a laser beam, classifies them i
 
 ##  Methodology
 
-### ** Preprocessing**
+### **Preprocessing**
 - Convert TXT to CSV  
 - Merge all RD files  
 - Create timestamp column  
 - Remove rows with `n1–n20 = 0` (no rain detected)
 
-### ** Computing Parameters**
+### **Computing Parameters**
 
 ### **Rainfall Intensity (Formula-based)**  
 $$
