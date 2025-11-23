@@ -127,10 +127,11 @@ $$
 ## Authors
 
 **Manishita Biswas**  
-**Anik Khajanchi**  
+**Anik Khajanchi**
 
 B.Tech – Electronics & Communication Engineering  
-University of Calcutta  
+University of Calcutta
+
 
 If you found this useful, feel free to ⭐ the repository!
 
