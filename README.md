@@ -7,7 +7,7 @@
 
 ## 📌 Project Overview
 
-This project analyzes **Rain Drop Size Distribution (DSD)** in a tropical region using multi-year real-world data (2010–2015) collected from an **RD-80 Optical Disdrometer**.
+This project analyzes **Rain Drop Size Distribution (DSD)** in a tropical region using multi-year real-world data (2010–2015) collected from an **RD-80 Disdrometer**.
 
 The work integrates:
 - 🌧️ **Rainfall microphysics (DSD analysis)**
