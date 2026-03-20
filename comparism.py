@@ -1,110 +1,135 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import glob
-import os
 
-# ------------------------------------------------------------
-# CONSTANTS (RD-80 Manual)
-# ------------------------------------------------------------
-
-F = 0.005  # sensor area (m²)
+# ─────────────────────────────────────────────────────────────────
+# CONSTANTS
+# ─────────────────────────────────────────────────────────────────
+F = 0.005  # sensor area [m²]
 
 Di = np.array([
     0.359, 0.455, 0.551, 0.656, 0.771,
     0.917, 1.131, 1.331, 1.506, 1.665,
     1.912, 2.259, 2.589, 2.869, 3.205,
     3.544, 3.916, 4.350, 4.859, 5.373
-])  # in mm
+])
 
-# Convert diameters mm → meters
-Di_m = Di / 1000.0
+# ─────────────────────────────────────────────────────────────────
+# LOAD & CLEAN
+# ─────────────────────────────────────────────────────────────────
+print("Loading processed data...")
+df = pd.read_csv("processed_data.csv", low_memory=False)
+print(f"  Raw rows : {len(df):,}")
 
+df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+df = df.dropna(subset=['timestamp'])
+df = df[(df['timestamp'].dt.year >= 2010) & (df['timestamp'].dt.year <= 2015)]
+df = df.sort_values(by='timestamp').reset_index(drop=True)
+print(f"  Filtered rows : {len(df):,}")
+print(f"  Years present : {sorted(df['timestamp'].dt.year.unique().tolist())}")
 
-# ------------------------------------------------------------
-# LOAD ALL CSV FILES
-# ------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────
+# 1. INSTRUMENT RI
+#    The RI column is CUMULATIVE (RAT). Diff it to get per-interval
+#    rainfall in mm per 30s, then multiply by 120 to get mm/h.
+# ─────────────────────────────────────────────────────────────────
+print("Deriving instrument RI from cumulative column...")
+df['RI_instrument'] = df['RI'].diff().clip(lower=0) * 120  # mm/30s → mm/h
+df['RI_instrument'] = df['RI_instrument'].fillna(0)
 
-path = "data/"
-files = sorted(glob.glob(os.path.join(path, "RD-*.csv")))
+print(f"  Instrument RI — max: {df['RI_instrument'].max():.2f}  "
+      f"mean (rain only): {df[df['RI_instrument']>0]['RI_instrument'].mean():.2f} mm/h")
 
-all_times = []
-ri_formula = []
-ri_inst = []
+# ─────────────────────────────────────────────────────────────────
+# 2. COMPUTED RI FROM DSD
+# ─────────────────────────────────────────────────────────────────
+print("Computing RI from DSD drop counts...")
+drop_cols = [f'n{i}' for i in range(1, 21)]
+for c in drop_cols:
+    df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
-for file in files:
-    df = pd.read_csv(file)
+# Use 30s interval if column missing or has bad values
+if 'Interval [s]' in df.columns:
+    t = pd.to_numeric(df['Interval [s]'], errors='coerce').fillna(30).values
+else:
+    t = np.full(len(df), 30)
+t = np.where(t <= 0, 30, t)   # guard against zero/negative intervals
 
-    # Drop count columns n1–n20
-    drop_cols = [f"n{i}" for i in range(1, 21)]
-    df["drop_sum"] = df[drop_cols].sum(axis=1)
+N                = df[drop_cols].values
+factor           = (np.pi / 6.0) * 3.6e3 / (F * t)
+df['RI_computed'] = factor * np.sum(N * (Di ** 3), axis=1)
 
-    # Filter rows with real drops
-    df_valid = df[df["drop_sum"] > 0]
+print(f"  Computed RI   — max: {df['RI_computed'].max():.2f}  "
+      f"mean (rain only): {df[df['RI_computed']>0]['RI_computed'].mean():.2f} mm/h")
 
-    if df_valid.empty:
-        continue
+# ─────────────────────────────────────────────────────────────────
+# RESAMPLE TO HOURLY for clean full-range plot
+# ─────────────────────────────────────────────────────────────────
+print("Resampling to hourly for full 2010-2015 view...")
+df_h = (df.set_index('timestamp')[['RI_instrument','RI_computed']]
+          .resample('1h').mean()
+          .fillna(0)
+          .reset_index())
 
-    # Time
-    times = pd.to_datetime(df_valid["YYYY-MM-DD"] + " " + df_valid["hh:mm:ss"])
-    all_times.append(times.values)
+# Light smoothing
+df_h['inst_smooth'] = df_h['RI_instrument'].rolling(6, min_periods=1).mean()
+df_h['comp_smooth'] = df_h['RI_computed'].rolling(6, min_periods=1).mean()
 
-    # Drop counts (matrix), time interval (sec)
-    N = df_valid[drop_cols].values
-    t = df_valid["Interval [s]"].values
+print(f"  Hourly points : {len(df_h):,}")
 
-    # --------------------------------------------------------
-    # CORRECTED RD-80 MANUAL FORMULA (Di converted to meters)
-    # --------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────
+# PLOT — TWO PANELS stacked
+# ─────────────────────────────────────────────────────────────────
+print("Plotting comparison...")
 
-    factor = (np.pi / 6) * 3.6e3 / (F * t)  # 3600 / (F * t)
-    RI_f = factor * np.sum(N * (Di_m ** 3), axis=1)
+fig, axes = plt.subplots(2, 1, figsize=(16, 10), sharex=True)
+fig.suptitle('Instrument vs Computed Rainfall Intensity (2010–2015)',
+             fontsize=14, fontweight='bold')
 
-    ri_formula.append(RI_f)
-    ri_inst.append(df_valid["RI [mm/h]"].values)
+year_colors = ['#f0f4ff', '#ffffff']
 
-# Combine all results
-all_times = np.concatenate(all_times)
-ri_formula = np.concatenate(ri_formula)
-ri_inst = np.concatenate(ri_inst)
+for ax in axes:
+    for i, year in enumerate(range(2010, 2016)):
+        ax.axvspan(pd.Timestamp(f'{year}-01-01'),
+                   pd.Timestamp(f'{year+1}-01-01'),
+                   alpha=0.35, color=year_colors[i % 2], zorder=0)
+    ax.set_xlim(pd.Timestamp('2010-01-01'), pd.Timestamp('2015-12-31'))
+    ax.set_ylim(bottom=0)
+    ax.grid(True, alpha=0.35, linewidth=0.5)
 
-# Sort by time
-order = np.argsort(all_times)
-all_times = all_times[order]
-ri_formula = ri_formula[order]
-ri_inst = ri_inst[order]
+# Panel 1 — Instrument RI
+axes[0].plot(df_h['timestamp'], df_h['inst_smooth'],
+             color='#4361ee', linewidth=0.9, label='Instrument RI (from cumulative diff)')
+axes[0].fill_between(df_h['timestamp'], df_h['inst_smooth'],
+                     alpha=0.2, color='#4361ee')
+axes[0].set_ylabel('RI [mm/h]', fontsize=10)
+axes[0].set_title('Instrument RI', fontsize=11, fontweight='bold')
+axes[0].legend(fontsize=9)
 
+# Year labels panel 1
+y_top = axes[0].get_ylim()[1]
+for year in range(2010, 2016):
+    axes[0].text(pd.Timestamp(f'{year}-07-01'), y_top * 0.96,
+                 str(year), ha='center', va='top',
+                 fontsize=10, color='#555555', fontweight='bold')
 
-# ------------------------------------------------------------
-# RI VALUES SUMMARY
-# ------------------------------------------------------------
+# Panel 2 — Computed RI
+axes[1].plot(df_h['timestamp'], df_h['comp_smooth'],
+             color='#f72585', linewidth=0.9, label='Computed RI (from DSD formula)')
+axes[1].fill_between(df_h['timestamp'], df_h['comp_smooth'],
+                     alpha=0.2, color='#f72585')
+axes[1].set_ylabel('RI [mm/h]', fontsize=10)
+axes[1].set_xlabel('Time', fontsize=10)
+axes[1].set_title('Computed RI (DSD formula)', fontsize=11, fontweight='bold')
+axes[1].legend(fontsize=9)
 
-print("\n------------------ RI VALUES SUMMARY ------------------")
-print(f"Instrument RI: min={ri_inst.min():.3e}, median={np.median(ri_inst):.3e}, max={ri_inst.max():.3e}")
-print(f"Formula RI:    min={ri_formula.min():.3e}, median={np.median(ri_formula):.3e}, max={ri_formula.max():.3e}")
+# Year labels panel 2
+y_top2 = axes[1].get_ylim()[1]
+for year in range(2010, 2016):
+    axes[1].text(pd.Timestamp(f'{year}-07-01'), y_top2 * 0.96,
+                 str(year), ha='center', va='top',
+                 fontsize=10, color='#555555', fontweight='bold')
 
-# Ratio check
-median_inst = np.median(ri_inst)
-median_formula = np.median(ri_formula)
-
-ratio = (median_formula / median_inst) if median_inst > 0 else float('inf')
-print(f"\nRatio (Median Formula RI / Instrument RI) = {ratio:.3e}")
-print("--------------------------------------------------------\n")
-
-
-# ------------------------------------------------------------
-# PLOT
-# ------------------------------------------------------------
-
-plt.figure(figsize=(12,6))
-plt.plot(all_times, ri_inst, label="Instrument RI", lw=1)
-plt.plot(all_times, ri_formula, label="Formula RI", lw=1)
-
-plt.yscale("log")
-plt.xlabel("Time")
-plt.ylabel("Rain Intensity (mm/h)")
-plt.title("Comparison: RI (Formula) vs RI (Instrument)")
-plt.grid(True, which="both")
-plt.legend()
+plt.xticks(rotation=30, ha='right')
 plt.tight_layout()
 plt.show()
