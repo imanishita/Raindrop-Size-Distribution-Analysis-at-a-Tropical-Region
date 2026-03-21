@@ -19,7 +19,7 @@ Di = np.array([
 # ─────────────────────────────────────────────────────────────────
 print("Loading processed data...")
 df = pd.read_csv("processed_data.csv", low_memory=False)
-print(f"  Raw rows : {len(df):,}")
+print(f"  Raw rows      : {len(df):,}")
 
 df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
 df = df.dropna(subset=['timestamp'])
@@ -30,52 +30,55 @@ print(f"  Years present : {sorted(df['timestamp'].dt.year.unique().tolist())}")
 
 # ─────────────────────────────────────────────────────────────────
 # 1. INSTRUMENT RI
-#    The RI column is CUMULATIVE (RAT). Diff it to get per-interval
-#    rainfall in mm per 30s, then multiply by 120 to get mm/h.
+#    RI column is cumulative (RAT). Diff → mm per 30s → × 120 = mm/h
 # ─────────────────────────────────────────────────────────────────
 print("Deriving instrument RI from cumulative column...")
-df['RI_instrument'] = df['RI'].diff().clip(lower=0) * 120  # mm/30s → mm/h
+df['RI_instrument'] = df['RI'].diff().clip(lower=0) * 120
 df['RI_instrument'] = df['RI_instrument'].fillna(0)
 
-print(f"  Instrument RI — max: {df['RI_instrument'].max():.2f}  "
-      f"mean (rain only): {df[df['RI_instrument']>0]['RI_instrument'].mean():.2f} mm/h")
+# Cap physically unrealistic values (> 300 mm/h is sensor noise)
+df.loc[df['RI_instrument'] > 300, 'RI_instrument'] = np.nan
+df['RI_instrument'] = df['RI_instrument'].fillna(0)
+
+print(f"  Instrument RI — max  : {df['RI_instrument'].max():.2f} mm/h")
+print(f"  Instrument RI — mean : {df[df['RI_instrument']>0]['RI_instrument'].mean():.2f} mm/h")
 
 # ─────────────────────────────────────────────────────────────────
 # 2. COMPUTED RI FROM DSD
+#    FIX: Use F in cm² (not m²) so Di in mm gives mm/h directly
 # ─────────────────────────────────────────────────────────────────
 print("Computing RI from DSD drop counts...")
 drop_cols = [f'n{i}' for i in range(1, 21)]
 for c in drop_cols:
     df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
-# Use 30s interval if column missing or has bad values
 if 'Interval [s]' in df.columns:
     t = pd.to_numeric(df['Interval [s]'], errors='coerce').fillna(30).values
 else:
     t = np.full(len(df), 30)
-t = np.where(t <= 0, 30, t)   # guard against zero/negative intervals
+t = np.where(t <= 0, 30, t)
 
-N                = df[drop_cols].values
-factor           = (np.pi / 6.0) * 3.6e3 / (F * t)
+N      = df[drop_cols].values
+F_cm2  = F * 1e4                                  # 0.005 m² → 50 cm²
+factor = (np.pi / 6.0) * (3.6e3 / (F_cm2 * t))   # Di in mm → RI in mm/h
 df['RI_computed'] = factor * np.sum(N * (Di ** 3), axis=1)
 
-print(f"  Computed RI   — max: {df['RI_computed'].max():.2f}  "
-      f"mean (rain only): {df[df['RI_computed']>0]['RI_computed'].mean():.2f} mm/h")
+# Cap outliers
+df.loc[df['RI_computed'] > 300, 'RI_computed'] = np.nan
+df['RI_computed'] = df['RI_computed'].fillna(0)
+
+print(f"  Computed RI   — max  : {df['RI_computed'].max():.2f} mm/h")
+print(f"  Computed RI   — mean : {df[df['RI_computed']>0]['RI_computed'].mean():.2f} mm/h")
 
 # ─────────────────────────────────────────────────────────────────
-# RESAMPLE TO HOURLY for clean full-range plot
+# RESAMPLE TO DAILY MAX
 # ─────────────────────────────────────────────────────────────────
-print("Resampling to hourly for full 2010-2015 view...")
-df_h = (df.set_index('timestamp')[['RI_instrument','RI_computed']]
-          .resample('1h').mean()
-          .fillna(0)
-          .reset_index())
-
-# Light smoothing
-df_h['inst_smooth'] = df_h['RI_instrument'].rolling(6, min_periods=1).mean()
-df_h['comp_smooth'] = df_h['RI_computed'].rolling(6, min_periods=1).mean()
-
-print(f"  Hourly points : {len(df_h):,}")
+print("Resampling to daily max for full 2010–2015 view...")
+df_daily = (df.set_index('timestamp')[['RI_instrument', 'RI_computed']]
+              .resample('1D').max()
+              .fillna(0)
+              .reset_index())
+print(f"  Daily points  : {len(df_daily):,}")
 
 # ─────────────────────────────────────────────────────────────────
 # PLOT — TWO PANELS stacked
@@ -97,36 +100,36 @@ for ax in axes:
     ax.set_ylim(bottom=0)
     ax.grid(True, alpha=0.35, linewidth=0.5)
 
-# Panel 1 — Instrument RI
-axes[0].plot(df_h['timestamp'], df_h['inst_smooth'],
-             color='#4361ee', linewidth=0.9, label='Instrument RI (from cumulative diff)')
-axes[0].fill_between(df_h['timestamp'], df_h['inst_smooth'],
-                     alpha=0.2, color='#4361ee')
+# ── Panel 1: Instrument RI ───────────────────────────────────────
+axes[0].plot(df_daily['timestamp'], df_daily['RI_instrument'],
+             color='#4361ee', linewidth=0.8, alpha=0.85,
+             label='Instrument RI (daily max)')
+axes[0].fill_between(df_daily['timestamp'], df_daily['RI_instrument'],
+                     alpha=0.15, color='#4361ee')
 axes[0].set_ylabel('RI [mm/h]', fontsize=10)
 axes[0].set_title('Instrument RI', fontsize=11, fontweight='bold')
 axes[0].legend(fontsize=9)
 
-# Year labels panel 1
 y_top = axes[0].get_ylim()[1]
 for year in range(2010, 2016):
-    axes[0].text(pd.Timestamp(f'{year}-07-01'), y_top * 0.96,
+    axes[0].text(pd.Timestamp(f'{year}-07-01'), y_top * 0.95,
                  str(year), ha='center', va='top',
                  fontsize=10, color='#555555', fontweight='bold')
 
-# Panel 2 — Computed RI
-axes[1].plot(df_h['timestamp'], df_h['comp_smooth'],
-             color='#f72585', linewidth=0.9, label='Computed RI (from DSD formula)')
-axes[1].fill_between(df_h['timestamp'], df_h['comp_smooth'],
-                     alpha=0.2, color='#f72585')
+# ── Panel 2: Computed RI ─────────────────────────────────────────
+axes[1].plot(df_daily['timestamp'], df_daily['RI_computed'],
+             color='#f72585', linewidth=0.8, alpha=0.85,
+             label='Computed RI — DSD formula (daily max)')
+axes[1].fill_between(df_daily['timestamp'], df_daily['RI_computed'],
+                     alpha=0.15, color='#f72585')
 axes[1].set_ylabel('RI [mm/h]', fontsize=10)
 axes[1].set_xlabel('Time', fontsize=10)
 axes[1].set_title('Computed RI (DSD formula)', fontsize=11, fontweight='bold')
 axes[1].legend(fontsize=9)
 
-# Year labels panel 2
 y_top2 = axes[1].get_ylim()[1]
 for year in range(2010, 2016):
-    axes[1].text(pd.Timestamp(f'{year}-07-01'), y_top2 * 0.96,
+    axes[1].text(pd.Timestamp(f'{year}-07-01'), y_top2 * 0.95,
                  str(year), ha='center', va='top',
                  fontsize=10, color='#555555', fontweight='bold')
 
