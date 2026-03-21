@@ -9,7 +9,9 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
 **Final Year Project**
-**B.Tech Electronics & Communication Engineering**
+
+**B.Tech in Electronics & Communication Engineering**
+
 **University of Calcutta**
 
 *Manishita Biswas · Anik Khajanchi*
