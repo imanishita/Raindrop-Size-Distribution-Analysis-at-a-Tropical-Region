@@ -1,20 +1,3 @@
-"""
-╔══════════════════════════════════════════════════════════════════╗
-║   Random Forest — 1-Hour Rainfall Intensity Forecasting          ║
-║   Input  : DSD features at time t  (n1–n20 + derived + lags)    ║
-║   Output : Computed RI at time t + 1 hour                        ║
-║   Data   : RD-80 Disdrometer | Tropical Region | 2010–2015       ║
-╚══════════════════════════════════════════════════════════════════╝
-
-TARGET: Computed RI (same DSD physics formula as comparism.py)
-        RI = (π/6) × (3.6×10³ / F_cm2 × t) × Σ(nᵢ × Dᵢ³)
-        Shifted 120 steps forward → 120 × 30s = 1 hour ahead
-
-        Expected output stats:
-          max  ~300 mm/h
-          mean ~41  mm/h  (consistent with comparism.py)
-"""
-
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
