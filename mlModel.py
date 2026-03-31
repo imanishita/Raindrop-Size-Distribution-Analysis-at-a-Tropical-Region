@@ -1,16 +1,4 @@
-"""
-╔══════════════════════════════════════════════════════════════════╗
-║   Random Forest — Current Rainfall Intensity Prediction          ║
-║   Input  : DSD features at time t  (n1–n20 + derived)           ║
-║   Output : Computed RI at time t   (DSD physics formula)         ║
-║   Data   : RD-80 Disdrometer | Tropical Region | 2010–2015       ║
-╚══════════════════════════════════════════════════════════════════╝
 
-TARGET: Computed RI using the same DSD formula as comparism.py
-        RI = (π/6) × (3.6×10³ / F_cm2 × t) × Σ(nᵢ × Dᵢ³)
-        This gives max ~300 mm/h, mean ~41 mm/h — consistent
-        with your comparism.py output.
-"""
 
 import pandas as pd
 import numpy as np
