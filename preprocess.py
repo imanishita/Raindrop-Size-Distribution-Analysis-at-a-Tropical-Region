@@ -1,62 +1,134 @@
 import pandas as pd
+import numpy as np
 
 INPUT_FILE = "merged_data.csv"
 OUTPUT_FILE = "processed_data.csv"
 
-print("Loading data...")
+# ─────────────────────────────────────────────────────────────────
+# RD-80 PHYSICAL CONSTANTS
+# ─────────────────────────────────────────────────────────────────
+Di = np.array([
+    0.359, 0.455, 0.551, 0.656, 0.771,
+    0.917, 1.131, 1.331, 1.506, 1.665,
+    1.912, 2.259, 2.589, 2.869, 3.205,
+    3.544, 3.916, 4.350, 4.859, 5.373
+])  # drop diameters [mm]
+
+F     = 0.005    # sensor area [m²]
+F_cm2 = F * 1e4  # sensor area [cm²] = 50 cm²
+t_s   = 30       # sampling interval [seconds]
+
+# RI cap for Kolkata region
+RI_MAX = 100.0   # mm/h — anything above this is sensor noise
+
+DROP_COLS = [f'n{i}' for i in range(1, 21)]
+
+print("=" * 62)
+print("  PREPROCESSING PIPELINE — WITH PHYSICS-BASED CLEANING")
+print("=" * 62)
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 1 — LOAD RAW DATA
+# ─────────────────────────────────────────────────────────────────
+print("\n[STEP 1] Loading raw data …")
 df = pd.read_csv(INPUT_FILE, low_memory=False)
+print(f"  Original shape    : {df.shape}")
 
-print("Original shape:", df.shape)
-
-# -----------------------------
-# RENAME COLUMNS
-# -----------------------------
+# ─────────────────────────────────────────────────────────────────
+# STEP 2 — RENAME COLUMNS
+# ─────────────────────────────────────────────────────────────────
 df.rename(columns={
     'RI [mm/h]': 'RI',
     'RA [mm]': 'RA',
     'RAT [mm]': 'RAT'
 }, inplace=True)
 
-# -----------------------------
-# REMOVE NO-RAIN ROWS
-# -----------------------------
-drop_cols = [f'n{i}' for i in range(1, 21)]
-df['total_drops'] = df[drop_cols].sum(axis=1)
-df = df[df['total_drops'] > 0]
+# ─────────────────────────────────────────────────────────────────
+# STEP 3 — COERCE NUMERIC TYPES
+# ─────────────────────────────────────────────────────────────────
+print("\n[STEP 3] Coercing numeric types …")
 
-print("After removing no-rain rows:", df.shape)
+df['RI'] = pd.to_numeric(df['RI'], errors='coerce')
+for c in DROP_COLS:
+    df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
-# -----------------------------
-# CREATE TIMESTAMP
-# -----------------------------
-print("Creating timestamp...")
+# ─────────────────────────────────────────────────────────────────
+# STEP 4 — CREATE TIMESTAMP
+# ─────────────────────────────────────────────────────────────────
+print("\n[STEP 4] Creating timestamp …")
 
 if 'YYYY-MM-DD' in df.columns and 'hh:mm:ss' in df.columns:
-    
     df['timestamp'] = pd.to_datetime(
         df['YYYY-MM-DD'].astype(str).str.strip() + ' ' +
         df['hh:mm:ss'].astype(str).str.strip(),
         errors='coerce'
     )
-
 else:
     raise ValueError("Date/Time columns not found!")
 
-# Remove invalid timestamps only
 df = df.dropna(subset=['timestamp'])
+df = df.sort_values('timestamp').reset_index(drop=True)
+print(f"  Valid timestamps  : {len(df):,}")
 
-print("Timestamp created!")
+# ─────────────────────────────────────────────────────────────────
+# STEP 5 — REMOVE NO-RAIN ROWS
+# ─────────────────────────────────────────────────────────────────
+print("\n[STEP 5] Removing no-rain rows (total drops = 0) …")
 
-# -----------------------------
-# TIME FEATURES
-# -----------------------------
-df['hour'] = df['timestamp'].dt.hour
-df['day'] = df['timestamp'].dt.day
+df['total_drops'] = df[DROP_COLS].sum(axis=1)
+before = len(df)
+df = df[df['total_drops'] > 0]
+print(f"  Removed           : {before - len(df):,} zero-rain rows")
+print(f"  Remaining         : {len(df):,}")
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 6 — PHYSICS-BASED CLEANING (NEW)
+# ─────────────────────────────────────────────────────────────────
+print("\n[STEP 6] Physics-based cleaning …")
+before = len(df)
+
+# ── 6A: Cap extreme rainfall intensity ──────────────────────────
+# Kolkata max realistic RI ≈ 70–100 mm/h.
+# Values > 100 mm/h are sensor noise / corruption.
+ri_flagged = (df['RI'] > RI_MAX).sum()
+df = df[df['RI'] <= RI_MAX]
+print(f"  6A — RI > {RI_MAX} mm/h removed     : {ri_flagged:,} rows")
+
+# ── 6B: Remove large-drop spike anomaly (n20) ──────────────────
+# Channel n20 = 5.373 mm drops. These are extremely rare in nature.
+# Count >= 50 in a 30s window is physically impossible sensor noise.
+n20_flagged = (df['n20'] >= 50).sum()
+df = df[df['n20'] < 50]
+print(f"  6B — n20 >= 50 removed         : {n20_flagged:,} rows")
+
+# ── 6C: Remove single-bin dominance (sensor malfunction) ───────
+# Real rain follows a bell-curve DSD distribution across bins.
+# If one bin holds >= 70% of all drops → sensor glitch / noise.
+df['max_bin'] = df[DROP_COLS].max(axis=1)
+df['dominance'] = df['max_bin'] / (df['total_drops'] + 1e-6)
+dom_flagged = (df['dominance'] >= 0.70).sum()
+df = df[df['dominance'] < 0.70]
+print(f"  6C — Single-bin dom >= 70%     : {dom_flagged:,} rows")
+
+# Clean up temp columns
+df.drop(columns=['max_bin', 'dominance'], inplace=True)
+
+total_removed = before - len(df)
+print(f"\n  Total rows cleaned : {total_removed:,}  ({total_removed/before*100:.2f}%)")
+print(f"  Rows remaining     : {len(df):,}")
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 7 — TIME FEATURES
+# ─────────────────────────────────────────────────────────────────
+print("\n[STEP 7] Creating time features …")
+
+df['hour']  = df['timestamp'].dt.hour
+df['day']   = df['timestamp'].dt.day
 df['month'] = df['timestamp'].dt.month
 
-# -----------------------------
-# SEASON
-# -----------------------------
+# ─────────────────────────────────────────────────────────────────
+# STEP 8 — SEASON LABELS
+# ─────────────────────────────────────────────────────────────────
 def get_season(month):
     if month in [6, 7, 8, 9]:
         return "monsoon"
@@ -69,16 +141,30 @@ def get_season(month):
 
 df['season'] = df['month'].apply(get_season)
 
-# -----------------------------
-# FINAL CLEAN
-# -----------------------------
+# ─────────────────────────────────────────────────────────────────
+# STEP 9 — FINAL VALIDATION
+# ─────────────────────────────────────────────────────────────────
+print("\n[STEP 9] Final validation …")
+
 df = df.dropna(subset=['RI'])
+# Recalculate total_drops after all filtering
+df['total_drops'] = df[DROP_COLS].sum(axis=1)
 
-print("Final shape:", df.shape)
+print(f"  Final shape       : {df.shape}")
+print(f"  RI range          : {df['RI'].min():.3f} – {df['RI'].max():.3f} mm/h")
+print(f"  RI mean           : {df['RI'].mean():.3f} mm/h")
+print(f"  RI 99th pctile    : {df['RI'].quantile(0.99):.3f} mm/h")
+print(f"  RI 95th pctile    : {df['RI'].quantile(0.95):.3f} mm/h")
+print(f"  Year range        : {df['timestamp'].dt.year.min()} – {df['timestamp'].dt.year.max()}")
+print(f"  Seasons           : {df['season'].value_counts().to_dict()}")
 
-# -----------------------------
-# SAVE
-# -----------------------------
+# ─────────────────────────────────────────────────────────────────
+# STEP 10 — SAVE
+# ─────────────────────────────────────────────────────────────────
+print(f"\n[STEP 10] Saving to {OUTPUT_FILE} …")
 df.to_csv(OUTPUT_FILE, index=False)
 
-print("Saved as processed_data.csv")
+print(f"  Saved successfully!")
+print("\n" + "=" * 62)
+print("  PREPROCESSING COMPLETE")
+print("=" * 62)
