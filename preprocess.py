@@ -87,31 +87,11 @@ print(f"  Remaining         : {len(df):,}")
 print("\n[STEP 6] Physics-based cleaning …")
 before = len(df)
 
-# ── 6A: Cap extreme rainfall intensity ──────────────────────────
-# Kolkata max realistic RI ≈ 70–100 mm/h.
+# Cap extreme rainfall intensity
 # Values > 100 mm/h are sensor noise / corruption.
 ri_flagged = (df['RI'] > RI_MAX).sum()
 df = df[df['RI'] <= RI_MAX]
-print(f"  6A — RI > {RI_MAX} mm/h removed     : {ri_flagged:,} rows")
-
-# ── 6B: Remove large-drop spike anomaly (n20) ──────────────────
-# Channel n20 = 5.373 mm drops. These are extremely rare in nature.
-# Count >= 50 in a 30s window is physically impossible sensor noise.
-n20_flagged = (df['n20'] >= 50).sum()
-df = df[df['n20'] < 50]
-print(f"  6B — n20 >= 50 removed         : {n20_flagged:,} rows")
-
-# ── 6C: Remove single-bin dominance (sensor malfunction) ───────
-# Real rain follows a bell-curve DSD distribution across bins.
-# If one bin holds >= 70% of all drops → sensor glitch / noise.
-df['max_bin'] = df[DROP_COLS].max(axis=1)
-df['dominance'] = df['max_bin'] / (df['total_drops'] + 1e-6)
-dom_flagged = (df['dominance'] >= 0.70).sum()
-df = df[df['dominance'] < 0.70]
-print(f"  6C — Single-bin dom >= 70%     : {dom_flagged:,} rows")
-
-# Clean up temp columns
-df.drop(columns=['max_bin', 'dominance'], inplace=True)
+print(f"  RI > {RI_MAX} mm/h removed       : {ri_flagged:,} rows")
 
 total_removed = before - len(df)
 print(f"\n  Total rows cleaned : {total_removed:,}  ({total_removed/before*100:.2f}%)")
