@@ -26,9 +26,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import warnings, os, sys, argparse
 from datetime import timedelta
-
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics  import r2_score, mean_squared_error
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.metrics  import r2_score, mean_squared_error, classification_report
 from xgboost          import XGBRegressor
 
 warnings.filterwarnings('ignore')
@@ -71,6 +70,7 @@ date_range_str = (
 )
 
 DATA_FILE   = "processed_data.csv"
+INPUT_FILE_RAW = "merged_data.csv"
 PLOT_DIR    = "plots"
 os.makedirs(PLOT_DIR, exist_ok=True)
 N_COLS      = [f'n{i}' for i in range(1, 21)]
@@ -116,29 +116,69 @@ print(f"  Loaded {len(df):,} rows  |  "
       f"{df['timestamp'].dt.year.min()}-{df['timestamp'].dt.year.max()}")
 
 # ─────────────────────────────────────────────────────────────────
-# HYBRID ENSEMBLE HELPER
+# PEAK-AWARE HYBRID ENGINE
 # ─────────────────────────────────────────────────────────────────
-def build_hybrid(X_train, y_train, w_rf=0.4, w_xgb=0.6):
+def build_peak_aware_hybrid(X_train, y_train, w_rf=0.4, w_xgb=0.6):
     """
-    Train RF + XGBoost and return (rf, xgb) models.
-    Prediction: w_rf * rf.predict(X) + w_xgb * xgb.predict(X)
+    Train weighted RF + XGBoost and a binary Storm Classifier.
     """
+    # 1. Calculate Sample Weights (Bias towards peaks)
+    # Weight = (RI/10)^1.5 + 1  (More aggressive than linear, less than quadratic)
+    weights = np.power(y_train / 10.0, 1.5) + 1.0
+    
+    print(f"  Training with Sample Weights: min={weights.min():.1f}, max={weights.max():.1f}")
+    
+    # 2. Hybrid Regressors
     rf = RandomForestRegressor(
         n_estimators=200, max_depth=15,
         min_samples_split=5, min_samples_leaf=2,
         max_features='sqrt', n_jobs=-1, random_state=42
     )
     xgb = XGBRegressor(
-        n_estimators=300, max_depth=8,
-        learning_rate=0.05, subsample=0.8,
+        n_estimators=400, max_depth=8,
+        learning_rate=0.04, subsample=0.8,
         colsample_bytree=0.8, min_child_weight=3,
         reg_alpha=0.1, reg_lambda=1.0,
         n_jobs=-1, random_state=42,
         verbosity=0
     )
-    rf.fit(X_train, y_train)
-    xgb.fit(X_train, y_train)
-    return rf, xgb
+    
+    rf.fit(X_train, y_train, sample_weight=weights)
+    xgb.fit(X_train, y_train, sample_weight=weights)
+    
+    # 3. Storm Classifier (RI > 30 mm/h)
+    # This identifies if a 30s interval has the "DSD signature" of a storm.
+    is_storm = (y_train > 30).astype(int)
+    clf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+    
+    if is_storm.sum() > 5:
+        clf.fit(X_train, is_storm)
+        y_clf_pred = clf.predict(X_train)
+        print(f"  Storm Classifier Performance (Training Set):")
+        print(classification_report(is_storm, y_clf_pred, target_names=['Normal','Storm']))
+    else:
+        print("  Warning: Too few storm events for classifier training. Using fallback.")
+    
+    return rf, xgb, clf
+
+def get_peak_gain_factor(rf, xgb, X_val, y_val, w_rf, w_xgb):
+    """
+    Calculate seasonal Peak Gain Factor (PGF) based on training residuals.
+    PGF = 90th percentile of (Actual / Predicted) for storm events (RI > 30).
+    Captures the potential intensity of extremes the model typically misses.
+    """
+    y_pred_raw = w_rf * rf.predict(X_val) + w_xgb * xgb.predict(X_val)
+    
+    # Focus purely on extreme storm events for the gain factor
+    mask = (y_val > 30) & (y_pred_raw > 10)
+    if mask.sum() < 3: 
+        # Fallback to a broader range if too few extremes in the validation chunk
+        mask = (y_val > 15) & (y_pred_raw > 5)
+        if mask.sum() < 3: return 1.3
+    
+    ratios = y_val[mask] / y_pred_raw[mask]
+    pgf = np.percentile(ratios, 90) # 90th percentile captures the "peak potential"
+    return float(np.clip(pgf, 1.1, 1.6)) # Keep realistic multiplier
 
 def hybrid_predict(rf, xgb, X, w_rf=0.4, w_xgb=0.6):
     return w_rf * rf.predict(X) + w_xgb * xgb.predict(X)
@@ -178,6 +218,34 @@ MODE, reason = detect_mode(
 )
 print(f"\n[MODE] >>> {MODE} <<<")
 print(f"  Reason : {reason}")
+
+# ─────────────────────────────────────────────────────────────────
+# READ EXACT RAW TARGETS ONCE FOR EITHER MODE
+# ─────────────────────────────────────────────────────────────────
+print(f"\n[TARGETS] Reading exact raw daily targets from {INPUT_FILE_RAW} ...")
+target_dates_str = [d.strftime('%Y-%m-%d') for d in pd.date_range(start_date, end_date)]
+try:
+    raw_df_iter = pd.read_csv(INPUT_FILE_RAW, chunksize=500000, usecols=['YYYY-MM-DD', 'RI [mm/h]'], dtype={'YYYY-MM-DD': str, 'RI [mm/h]': str})
+    raw_targets = {}
+    for chunk in raw_df_iter:
+        chunk['YYYY-MM-DD'] = chunk['YYYY-MM-DD'].str.strip()
+        mask = chunk['YYYY-MM-DD'].isin(target_dates_str)
+        if mask.any():
+            match = chunk[mask].copy()
+            match['RI [mm/h]'] = pd.to_numeric(match['RI [mm/h]'], errors='coerce')
+            for date_str, grp in match.groupby('YYYY-MM-DD'):
+                valid_ri = grp['RI [mm/h]'].dropna()
+                valid_ri = valid_ri[valid_ri > 0]  # Only consider rain rows!
+                if len(valid_ri) > 0:
+                    if date_str not in raw_targets:
+                        raw_targets[date_str] = {'max': valid_ri.max(), 'sum': valid_ri.sum(), 'count': len(valid_ri)}
+                    else:
+                        raw_targets[date_str]['max'] = max(raw_targets[date_str]['max'], valid_ri.max())
+                        raw_targets[date_str]['sum'] += valid_ri.sum()
+                        raw_targets[date_str]['count'] += len(valid_ri)
+except Exception as e:
+    print(f"  Warning: Could not read {INPUT_FILE_RAW}. Target Calibration may fail. Error: {e}")
+    raw_targets = {}
 
 
 # =================================================================
@@ -252,101 +320,93 @@ if MODE == "VALIDATE":
     X_test  = test_df[FEATURES].values
     y_test  = test_df['RI'].values
 
-    rf, xgb = build_hybrid(X_train, y_train, W_RF, W_XGB)
+    rf, xgb, clf = build_peak_aware_hybrid(X_train, y_train, W_RF, W_XGB)
 
-    y_rf   = rf.predict(X_test)
-    y_xgb  = xgb.predict(X_test)
-    y_hyb  = np.clip(W_RF * y_rf + W_XGB * y_xgb, 0, 100)
-
-    # ── Target Calibration (Exact match for Max & Mean) ───────────
-    # The professor verifies the Final Max and Mean against the raw data.
-    # We calibrate the final predictions to exactly match test constraints.
-    y_pred = y_hyb.copy()
-    actual_max  = y_test.max()
-    actual_mean = y_test.mean()
-    N_samples   = len(y_test)
-
-    if actual_max > 0 and actual_mean > 0:
-        # 1. Scale mean broadly
-        y_pred = y_pred * (actual_mean / (y_pred.mean() + 1e-12))
-        
-        # 2. Stretch the peaks to hit actual_max exactly
-        pred_max = y_pred.max()
-        p90 = np.percentile(y_pred, 90)
-        
-        if pred_max > p90 and actual_max > p90:
-            mask = y_pred > p90
-            y_pred[mask] = p90 + (y_pred[mask] - p90) * ((actual_max - p90) / (pred_max - p90))
+    y_rf_raw   = rf.predict(X_test)
+    y_xgb_raw  = xgb.predict(X_test)
+    y_base     = np.clip(W_RF * y_rf_raw + W_XGB * y_xgb_raw, 0, 100)
+    
+    # ── Storm-Aware Peak Scaling (The Peak Correction Layer) ─────
+    # 1. Detect storms using DSD signature
+    is_storm_pred = clf.predict(X_test)
+    
+    # 2. Calculate PGF from Training data (No data leakage!)
+    # We use a validation subset of training data to find the scaling factor
+    # Split train into train/val for scaling estimation
+    split_idx = int(len(X_train) * 0.8)
+    X_s_train, X_s_val = X_train[:split_idx], X_train[split_idx:]
+    y_s_train, y_s_val = y_train[:split_idx], y_train[split_idx:]
+    
+    pgf = get_peak_gain_factor(rf, xgb, X_s_val, y_s_val, W_RF, W_XGB)
+    
+    # ── Adaptive Intensity-Aware Scaling ──────────────────────────
+    y_pred = y_base.copy()
+    for i in range(len(y_pred)):
+        if is_storm_pred[i] == 1:
+            # Adaptive dampening: If model is already high (>40), reduce the boost
+            # This prevents "ruining" accurate peaks like July 17.
+            # Ramp: full boost at 30 mm/h, zero extra boost at 70 mm/h
+            val = y_base[i]
+            damp = np.clip((70 - val) / (70 - 30), 0, 1)
+            scale = 1.0 + (pgf - 1.0) * damp
+            y_pred[i] = val * scale
             
-        # 3. Fine-tune to hit exact Max and Mean down to 8th decimal
-        # Force max
-        max_idx = np.argmax(y_pred)
-        y_pred[max_idx] = actual_max
-        
-        # Distribute the leftover mean uniformly across other samples proportionally
-        rem_sum_req = (actual_mean * N_samples) - actual_max
-        rem_sum_cur = y_pred.sum() - actual_max
-        if rem_sum_cur > 0:
-            scale = rem_sum_req / rem_sum_cur
-            rem_mask = np.ones(N_samples, dtype=bool)
-            rem_mask[max_idx] = False
-            y_pred[rem_mask] *= scale
-            
-        y_pred = np.clip(y_pred, 0, actual_max)
+    y_pred = np.clip(y_pred, 0, 100)
 
-    tgt_m = start_date.month
-    peak_corr = {tgt_m: (actual_max / y_hyb.max()) if y_hyb.max() > 0 else 1.0}
+    print(f"\n  Peak Correction [PGF]: x{pgf:.3f} (Adaptive)")
+    print(f"  Storm Intervals Detected: {is_storm_pred.sum()} / {len(X_test)}")
+    
+    # ── Final Metrics (Evaluation only, NOT for training) ────────
+    # The raw_targets are now used ONLY for stats and plotting comparisons.
 
     # ── Metrics ───────────────────────────────────────────────────
     def metrics(actual, pred):
         return r2_score(actual, pred), np.sqrt(mean_squared_error(actual, pred))
 
-    r2_rf,      rmse_rf      = metrics(y_test, y_rf)
-    r2_xgb,     rmse_xgb     = metrics(y_test, y_xgb)
-    r2_hyb_raw, rmse_hyb_raw = metrics(y_test, y_hyb)
+    r2_rf,      rmse_rf      = metrics(y_test, y_rf_raw)
+    r2_xgb,     rmse_xgb     = metrics(y_test, y_xgb_raw)
+    r2_hyb_raw, rmse_hyb_raw = metrics(y_test, y_base)
     r2_fin,     rmse_fin      = metrics(y_test, y_pred)
 
-    tgt_m = start_date.month
-    print(f"\n  Peak correction [{MONTH_NAMES[tgt_m-1]}]: x{peak_corr[tgt_m]:.3f}")
-    print(f"\n  ┌──────────────────────────────────────────────────────┐")
-    print(f"  │  Model Comparison                                    │")
-    print(f"  ├──────────────────┬──────────┬──────────┬────────────┤")
-    print(f"  │ Model            │    R²    │   RMSE   │  Max pred  │")
-    print(f"  ├──────────────────┼──────────┼──────────┼────────────┤")
-    print(f"  │ Random Forest    │ {r2_rf:.4f}  │ {rmse_rf:6.3f}   │ {y_rf.max():8.2f}   │")
-    print(f"  │ XGBoost          │ {r2_xgb:.4f}  │ {rmse_xgb:6.3f}   │ {y_xgb.max():8.2f}   │")
-    print(f"  │ Hybrid (raw)     │ {r2_hyb_raw:.4f}  │ {rmse_hyb_raw:6.3f}   │ {y_hyb.max():8.2f}   │")
-    print(f"  │ Hybrid+PeakCorr  │ {r2_fin:.4f}  │ {rmse_fin:6.3f}   │ {y_pred.max():8.2f}   │")
-    print(f"  └──────────────────┴──────────┴──────────┴────────────┘")
-    print(f"\n  Actual  — Mean: {y_test.mean():.2f}  Max: {y_test.max():.2f} mm/h")
-    print(f"  RF      — Mean: {y_rf.mean():.2f}  Max: {y_rf.max():.2f} mm/h")
-    print(f"  XGBoost — Mean: {y_xgb.mean():.2f}  Max: {y_xgb.max():.2f} mm/h")
-    print(f"  Hybrid  — Mean: {y_hyb.mean():.2f}  Max: {y_hyb.max():.2f} mm/h")
-    print(f"  Final   — Mean: {y_pred.mean():.2f}  Max: {y_pred.max():.2f} mm/h")
+    print(f"\n  +--------------------------------------------------------+")
+    print(f"  |  Model Comparison                                      |")
+    print(f"  +------------------+----------+----------+---------------+")
+    print(f"  | Model            |    R2    |   RMSE   |   Max pred    |")
+    print(f"  +------------------+----------+----------+---------------+")
+    print(f"  | Random Forest    | {r2_rf:.4f}   | {rmse_rf:6.3f}   | {y_rf_raw.max():8.2f}      |")
+    print(f"  | XGBoost          | {r2_xgb:.4f}   | {rmse_xgb:6.3f}   | {y_xgb_raw.max():8.2f}      |")
+    print(f"  | Hybrid (base)    | {r2_hyb_raw:.4f}   | {rmse_hyb_raw:6.3f}   | {y_base.max():8.2f}      |")
+    print(f"  | Hybrid+PeakCorr  | {r2_fin:.4f}   | {rmse_fin:6.3f}   | {y_pred.max():8.2f}      |")
+    print(f"  +------------------+----------+----------+---------------+")
+    print(f"\n  Actual  - Mean: {y_test.mean():.2f}  Max: {y_test.max():.2f} mm/h")
+    print(f"  RF      - Mean: {y_rf_raw.mean():.2f}  Max: {y_rf_raw.max():.2f} mm/h")
+    print(f"  XGBoost - Mean: {y_xgb_raw.mean():.2f}  Max: {y_xgb_raw.max():.2f} mm/h")
+    print(f"  Hybrid  - Mean: {y_base.mean():.2f}  Max: {y_base.max():.2f} mm/h")
+    print(f"  Final   - Mean: {y_pred.mean():.2f}  Max: {y_pred.max():.2f} mm/h")
 
     # ── 3-panel plot ──────────────────────────────────────────────
     fig, axes = plt.subplots(3, 1, figsize=(14, 14), facecolor=P['bg'], sharex=True)
-    fig.suptitle(f'Hybrid Ensemble Prediction — {date_range_str}',
+    fig.suptitle(f'Hybrid Ensemble Prediction - {date_range_str}',
                  fontsize=13, fontweight='bold', color=P['text'])
     ts = test_df['timestamp']
 
     axes[0].plot(ts, y_test, color=P['green'], linewidth=1.5, label='Actual RI', alpha=0.9)
-    axes[0].plot(ts, y_rf,   color=P['blue'],  linewidth=1.2, linestyle='--',
-                 label=f'RF (w={W_RF})', alpha=0.85)
-    style(axes[0], f'Random Forest — R²={r2_rf:.4f}  RMSE={rmse_rf:.3f} mm/h', '', 'RI (mm/h)')
+    axes[0].plot(ts, y_rf_raw,   color=P['blue'],  linewidth=1.2, linestyle='--',
+                 label=f'Weighted RF (w={W_RF})', alpha=0.85)
+    style(axes[0], f'Random Forest - R2={r2_rf:.4f}  RMSE={rmse_rf:.3f} mm/h', '', 'RI (mm/h)')
     axes[0].legend(fontsize=9); axes[0].set_ylim(bottom=0)
 
     axes[1].plot(ts, y_test, color=P['green'],  linewidth=1.5, label='Actual RI', alpha=0.9)
-    axes[1].plot(ts, y_xgb,  color=P['orange'], linewidth=1.2, linestyle='--',
-                 label=f'XGBoost (w={W_XGB})', alpha=0.85)
-    style(axes[1], f'XGBoost — R²={r2_xgb:.4f}  RMSE={rmse_xgb:.3f} mm/h', '', 'RI (mm/h)')
+    axes[1].plot(ts, y_xgb_raw,  color=P['orange'], linewidth=1.2, linestyle='--',
+                 label=f'Weighted XGBoost (w={W_XGB})', alpha=0.85)
+    style(axes[1], f'XGBoost - R2={r2_xgb:.4f}  RMSE={rmse_xgb:.3f} mm/h', '', 'RI (mm/h)')
     axes[1].legend(fontsize=9); axes[1].set_ylim(bottom=0)
 
-    axes[2].plot(ts, y_test, color=P['green'],  linewidth=1.5, label='Actual RI', alpha=0.9)
+    axes[2].plot(ts, y_test, color=P['green'],  linewidth=1.5, label='Actual RI (Processed)', alpha=0.9)
     axes[2].plot(ts, y_pred, color=P['purple'], linewidth=1.3, linestyle='--',
-                 label=f'Hybrid+PeakCorr  RF×{W_RF}+XGB×{W_XGB}', alpha=0.9)
+                 label=f'Hybrid+PeakEnhance (PGF=x{pgf:.2f})', alpha=0.9)
     axes[2].fill_between(ts, y_test, y_pred, alpha=0.08, color=P['red'])
-    style(axes[2], f'Final — R²={r2_fin:.4f}  RMSE={rmse_fin:.3f} mm/h', 'Time', 'RI (mm/h)')
+    style(axes[2], f'Final - R2={r2_fin:.4f}  RMSE={rmse_fin:.3f} mm/h', 'Time', 'RI (mm/h)')
     axes[2].legend(fontsize=9); axes[2].set_ylim(bottom=0)
     axes[2].text(0.02, 0.96,
         f'Actual max  : {y_test.max():.2f} mm/h\n'
@@ -359,9 +419,9 @@ if MODE == "VALIDATE":
     plt.xticks(rotation=30, ha='right')
     plt.tight_layout()
     fname = f"validate_hybrid_{start_date.strftime('%Y%m%d')}.png"
-    plt.savefig(os.path.join(PLOT_DIR, fname), dpi=150, facecolor=P['bg'])
+    # plt.savefig(os.path.join(PLOT_DIR, fname), dpi=150, facecolor=P['bg']) # User: don't save automatically
     plt.show()
-    print(f"\n  Plot saved: plots/{fname}")
+    print(f"\n  Plot displayed window. (Not saved automatically)")
 
 # =================================================================
 #  RECONSTRUCT MODE — daily hybrid for mean, KNN for max
@@ -428,13 +488,21 @@ elif MODE == "RECONSTRUCT":
 
     print(f"  Daily training rows : {len(train_daily):,}")
 
-    # ── R4: Train hybrid (mean_RI) + RF (pts) ────────────────────
-    print(f"  Training RF + XGBoost for mean_RI ...")
-    rf_mean, xgb_mean = build_hybrid(
+    # ── R4: Train peak-aware hybrid (mean_RI) + RF (pts) ──────────
+    print(f"  Training Peak-Aware RF + XGBoost for daily mean_RI ...")
+    rf_mean, xgb_mean, clf_mean = build_peak_aware_hybrid(
         train_daily[DAILY_FEAT].values,
         train_daily['mean_RI'].values,
         W_RF, W_XGB
     )
+    
+    # Calculate daily PGF
+    split_idx_d = int(len(train_daily) * 0.8)
+    X_d_val = train_daily[DAILY_FEAT].values[split_idx_d:]
+    y_d_val = train_daily['mean_RI'].values[split_idx_d:]
+    pgf_daily = get_peak_gain_factor(rf_mean, xgb_mean, X_d_val, y_d_val, W_RF, W_XGB)
+    print(f"  Daily Mean PGF: x{pgf_daily:.3f}")
+
     pts_model = RandomForestRegressor(
         n_estimators=150, max_depth=12, random_state=42, n_jobs=-1)
     pts_model.fit(train_daily[DAILY_FEAT], train_daily['rain_pts'])
@@ -464,13 +532,9 @@ elif MODE == "RECONSTRUCT":
             if len(grp) >= 5 else g_mean_corr
         )
 
-    # ── R6: KNN max_RI predictor ──────────────────────────────────
-    # RF and XGBoost both average across estimators/trees — this
-    # systematically crushes extreme max values. KNN sidesteps this
-    # by finding similar historical days and reading their ACTUAL
-    # max_RI values directly from the training set.
+    # ── R6: KNN max_RI predictor (95th Percentile) ────────────────
     def knn_max_predict(query_feat_df, train_df, feat_cols,
-                        month, K=20, pct=80):
+                        month, K=20, pct=95):
         same_month = train_df[train_df['month'] == month].copy()
         pool = same_month if len(same_month) >= K else train_df.copy()
 
@@ -488,15 +552,7 @@ elif MODE == "RECONSTRUCT":
 
         return float(np.percentile(nn_max, pct))
 
-    # ── Print correction table ────────────────────────────────────
-    print(f"\n  Month-stratified mean_RI correction (hybrid bias fix):")
-    print(f"  {'Month':<10} {'mean_corr':>10}  {'rainy days':>12}")
-    for m in range(1, 13):
-        n   = (rainy_train['month'] == m).sum()
-        src = f"{n} rainy days" if n >= 5 else "global fallback"
-        print(f"  {MONTH_NAMES[m-1]:<10} "
-              f"{monthly_mean_corr[m]:>10.3f}  {src:>12}")
-    print(f"  max_RI — KNN K=20, 80th pct, same-month neighbours")
+    print(f"\n  max_RI — KNN K=20, 95th pct (Peak-Aware), same-month neighbours")
 
     # ── R7: Recursive prediction ──────────────────────────────────
     num_days = (end_date - start_date).days + 1
@@ -523,18 +579,31 @@ elif MODE == "RECONSTRUCT":
             'pts_lag3'  : [float(current_state['pts_lag2'].iloc[0])],
         })
 
-        # mean_RI: hybrid prediction + month-specific correction
+        # mean_RI: peak-aware hybrid prediction
         raw_rf   = float(rf_mean.predict(feat[DAILY_FEAT])[0])
         raw_xgb  = float(xgb_mean.predict(feat[DAILY_FEAT])[0])
         raw_hyb  = W_RF * raw_rf + W_XGB * raw_xgb
-        pred_mean = float(np.clip(raw_hyb * monthly_mean_corr[m], 0, 100))
+        
+        # Scaling if daily storm classifier triggers
+        is_storm_d = clf_mean.predict(feat[DAILY_FEAT])[0]
+        pred_mean = raw_hyb * (pgf_daily if is_storm_d else 1.0)
+        pred_mean = float(np.clip(pred_mean * monthly_mean_corr[m], 0, 100))
 
-        # max_RI: KNN from historical same-month days
-        pred_max = float(np.clip(
+        # max_RI: KNN from historical same-month days (95th pct)
+        pred_max_base = float(np.clip(
             knn_max_predict(feat, train_daily, DAILY_FEAT, month=m,
-                            K=20, pct=80),
+                            K=20, pct=95),
             pred_mean, 100
         ))
+        
+        # Adaptive peak boost for reconstruct max_RI
+        if is_storm_d:
+            damp = np.clip((70 - pred_max_base) / (70 - 30), 0, 1)
+            pred_max = pred_max_base * (1.0 + (pgf_daily - 1.0) * damp)
+        else:
+            pred_max = pred_max_base
+            
+        pred_max = float(np.clip(pred_max, pred_mean, 100))
 
         pred_pts = max(0, int(pts_model.predict(feat[DAILY_FEAT])[0]))
 
@@ -655,9 +724,9 @@ elif MODE == "RECONSTRUCT":
 
         plt.tight_layout()
         fname = f"reconstruct_hybrid_{start_date.strftime('%Y%m%d')}.png"
-        plt.savefig(os.path.join(PLOT_DIR, fname), dpi=150, facecolor=P['bg'])
+        # plt.savefig(os.path.join(PLOT_DIR, fname), dpi=150, facecolor=P['bg'])
         plt.show()
-        print(f"\n  Plot saved: plots/{fname}")
+        print(f"\n  Plot displayed. (Not saved automatically)")
     else:
         print("\n  No rain predicted — no plot generated.")
 
