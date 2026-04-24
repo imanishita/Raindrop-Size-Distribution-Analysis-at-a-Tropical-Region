@@ -35,7 +35,6 @@ The project bridges **atmospheric physics** and **data science** — computing r
 - ✅ Compute physics-based Rainfall Intensity (RI) and Drop Size Distribution N(D)
 - ✅ Compare Instrument RI vs Physics-computed RI
 - ✅ Engineer DSD-derived features: LWC, Dm, Z, log_Z
-- ✅ Train a Random Forest model achieving **R² = 0.9995**
 - ✅ Analyse feature importance — confirming LWC and radar reflectivity Z as dominant predictors
 - ✅ **[NEW]** Derive Kolkata-specific Z-R relationships
 - ✅ **[NEW]** Classify Stratiform vs Convective rain using DSD thresholds
