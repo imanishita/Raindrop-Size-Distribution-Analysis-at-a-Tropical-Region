@@ -37,7 +37,10 @@ The project bridges **atmospheric physics** and **data science** — computing r
 - ✅ Engineer DSD-derived features: LWC, Dm, Z, log_Z
 - ✅ Train a Random Forest model achieving **R² = 0.9995**
 - ✅ Analyse feature importance — confirming LWC and radar reflectivity Z as dominant predictors
-- ⏳ Short-term rainfall forecasting *(see Future Work)*
+- ✅ **[NEW]** Derive Kolkata-specific Z-R relationships
+- ✅ **[NEW]** Classify Stratiform vs Convective rain using DSD thresholds
+- ✅ **[NEW]** Perform Seasonal DSD Variability Analysis (Monsoon, Pre-monsoon, etc.)
+- ⏳ Future-interval DSD parameter forecasting (Task 2 of ML Strategy)
 
 ---
 
@@ -125,6 +128,44 @@ Beyond raw drop counts, the following physics-derived features were engineered:
 
 ---
 
+## 🧪 Advanced Research Findings (Part 1)
+
+Based on recent research, the following three advanced analyses have been implemented on the Kolkata RD-80 dataset:
+
+### 1. Kolkata-specific Z-R Relationship
+We derived the radar reflectivity ($Z$) vs rain rate ($R$) relationship ($Z = A \cdot R^b$) from actual tropical data:
+
+*   **Kolkata (Computed):** $Z = 0.75 \times R^{1.317}$
+*   **Marshall-Palmer (Standard):** $Z = 200 \times R^{1.600}$
+
+**Finding:** The lower intercept ($0.75$) in Kolkata means that for the same rain rate, Kolkata drops produce significantly less radar reflectivity than the global average. This is because tropical drops in this region are smaller on average ($D_m \approx 0.98$ mm during monsoon). Since $Z \propto D^6$, small drops lead to much lower $Z$.
+
+### 2. Stratiform vs Convective Rain Classification
+Rain intervals were classified using a rain rate threshold ($R < 10$ mm/h = stratiform, $R \geq 10$ mm/h = convective):
+
+*   **Stratiform:** 79,692 intervals (38.0%)
+*   **Convective:** 1,29,924 intervals (62.0%)
+
+**Insight:** Kolkata shows significantly higher convective rain (62%) compared to other tropical regions like Nigeria (~15%). This reflects Kolkata's intense pre-monsoon squall lines (Kalbaisakhi) and strong monsoon convection.
+*   **Stratiform Fit:** $Z = 0.84 \times R^{1.24}$
+*   **Convective Fit:** $Z = 0.69 \times R^{1.34}$
+
+### 3. Seasonal DSD Analysis
+Mean DSD parameters were computed across four seasons:
+
+| Season | Rain Rate ($R$) | $D_m$ | LWC |
+|--------|-----------------|-------|-----|
+| **Monsoon** | 57.4 mm/h | 0.98 mm | 0.052 g/m³ |
+| **Post-monsoon** | 32.0 mm/h | 0.88 mm | 0.035 g/m³ |
+| **Pre-monsoon** | 49.0 mm/h | 1.10 mm | 0.039 g/m³ |
+| **Winter** | 49.0 mm/h | 0.97 mm | 0.042 g/m³ |
+
+**Key Observation:** Pre-monsoon drops are the largest ($D_m = 1.10$ mm) despite not being the highest rain rate season, consistent with the convective nature of Kalbaisakhi thunderstorms.
+
+---
+
+---
+
 ### 5. Machine Learning Model
 
 **Algorithm:** Random Forest Regression (Scikit-learn)
@@ -163,13 +204,14 @@ Output:  Rainfall Intensity (mm/h)
 | Plot | Description |
 |------|-------------|
 | `plots/rf_actual_vs_predicted.png` | Scatter: actual vs predicted RI (R²=0.9995) |
+| `plots/zr_relationship.png` | **[NEW]** Derived Z-R relationship vs Marshall-Palmer |
+| `plots/rain_type_classification.png` | **[NEW]** Convective vs Stratiform DSD comparison |
+| `plots/seasonal_nd_curves.png` | **[NEW]** Mean N(D) curves for all 4 seasons |
+| `plots/seasonal_dsd_parameters.png` | **[NEW]** Seasonal variation of RI, Dm, LWC, and Z |
 | `plots/rf_feature_importance.png` | Top 20 features ranked by importance |
 | `plots/rf_residuals.png` | Residual distribution (μ=0.023, σ=1.437) |
-| `plots/rf_ri_distribution.png` | Actual vs predicted RI histogram overlay |
 | `plots/comparism.png` | Instrument RI vs Computed RI comparison |
 | `plots/DistributionCurve.png` | DSD N(D) curves |
-| `plots/RainIntensity.png` | Rainfall intensity time series 2010–2015 |
-| `plots/dataset_overview.png` | Multi-year dataset diagnostic overview |
 
 ---
 
@@ -189,9 +231,12 @@ RAINDROP ANALYSIS/
 ├── mergeData.py               # Step 1: Merge all yearly RD-80 .txt files
 ├── preprocess.py              # Step 2: Clean, timestamp, feature extraction
 ├── rainIntensity.py           # Step 3: Physics-based RI + DSD computation
-├── comparism.py               # Step 4: Instrument vs Computed RI comparison
-├── plotDistributionCurve.py   # Step 5: DSD N(D) curve visualisation
-├── rf_current_ri.py           # Step 6: Random Forest ML model (R²=0.9995)
+├── zr_relationship.py         # Step 4: [NEW] Kolkata-specific Z-R derivation
+├── rain_type_classification.py # Step 5: [NEW] Stratiform vs Convective logic
+├── seasonal_dsd_analysis.py   # Step 6: [NEW] Seasonal N(D) and parameter stats
+├── comparism.py               # Step 7: Instrument vs Computed RI comparison
+├── plotDistributionCurve.py   # Step 8: DSD N(D) curve visualisation
+├── predict.py                 # Step 9: ML prediction model (Hybrid/RF)
 ├── main.py                    # Full pipeline runner
 │
 ├── merged_data.csv            # Combined dataset (all years)
@@ -248,22 +293,23 @@ python main.py
 
 ---
 
-## 🔭 Future Work
+## 🔭 Future Work: Revised ML Strategy (Part 2)
 
-### Short-Term Rainfall Forecasting
-The next planned extension is a **next-interval RI forecasting model** using temporal lag features:
+The machine learning approach is being pivoted to solve more physically meaningful tasks that cannot be solved by direct mathematical formulas:
 
-- **Model:** Random Forest / XGBoost / LightGBM
-- **Input:** DSD features at time *t* + lag values from *t-1, t-2, t-3*
-- **Output:** Predicted RI at time *t + 30s* or *t + 1 hour*
-- **Approach:** Year-based train/test split (train 2010–2014, test on 2015) to simulate real deployment on unseen future data
-- **Application:** Real-time flood early warning system integration
+### Task 1: Rain Type Classification
+*   **Goal:** Predict whether a 30-second interval is **Stratiform** or **Convective** given DSD features ($n_1$–$n_{20}$, LWC, $Z$, $D_m$).
+*   **Why:** This is a genuine classification problem that simple physics formulas cannot solve directly.
 
-### Additional Planned Extensions
-- Z-R relationship derivation and comparison with Marshall-Palmer (Z = 200R^1.6)
-- Convective vs Stratiform rainfall classification using DSD parameters
-- Seasonal and inter-annual DSD variability analysis
-- Integration with NASA POWER satellite precipitation data for regional validation
+### Task 2: Next-interval DSD Parameter Forecasting
+*   **Goal:** Predict future state ($D_m, Z, LWC$ at time $t+1$) given current state at time $t$.
+*   **Why:** Forecasting the future cannot be computed from current measurements using physics. 
+*   **Training:** 2010–2014 data.
+*   **Testing:** 2015 data.
+
+### Additional Extensions
+- Integration with NASA POWER satellite precipitation data for regional validation.
+- Real-time flood early warning system integration using the forecasting model.
 
 ---
 
