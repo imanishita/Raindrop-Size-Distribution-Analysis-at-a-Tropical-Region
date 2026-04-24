@@ -24,7 +24,8 @@ Usage:
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import warnings, os, sys, argparse
+import matplotlib.dates as mdates
+import warnings, os, sys, argparse, re
 from datetime import timedelta
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.metrics  import r2_score, mean_squared_error, classification_report
@@ -115,6 +116,31 @@ df = df[df['RI'] <= 100].reset_index(drop=True)
 print(f"  Loaded {len(df):,} rows  |  "
       f"{df['timestamp'].dt.year.min()}-{df['timestamp'].dt.year.max()}")
 
+# ── Derive file_date from source_file (observation day) ──────────
+# Each RD-80 file (RD-YYMMDD-HHMMSS.csv) spans ~24h starting at HHMMSS.
+# The YYMMDD defines the canonical "observation day" for ALL data in
+# that file, regardless of midnight crossings.
+def _parse_file_date(sf):
+    m = re.search(r'RD-(\d{2})(\d{2})(\d{2})', str(sf))
+    if m:
+        yy, mm, dd = m.groups()
+        return pd.Timestamp(f'20{yy}-{mm}-{dd}')
+    return pd.NaT
+
+if 'source_file' in df.columns and 'file_date' not in df.columns:
+    df['file_date'] = df['source_file'].apply(_parse_file_date)
+    fallback = df['file_date'].isna()
+    if fallback.any():
+        df.loc[fallback, 'file_date'] = df.loc[fallback, 'timestamp'].dt.normalize()
+elif 'file_date' in df.columns:
+    df['file_date'] = pd.to_datetime(df['file_date'], errors='coerce')
+else:
+    df['file_date'] = df['timestamp'].dt.normalize()
+    print("  WARNING: No source_file column — using calendar dates")
+
+df['file_date'] = df['file_date'].dt.normalize()
+print(f"  File dates      : {df['file_date'].min().date()} – {df['file_date'].max().date()}")
+
 # ─────────────────────────────────────────────────────────────────
 # PEAK-AWARE HYBRID ENGINE
 # ─────────────────────────────────────────────────────────────────
@@ -191,24 +217,15 @@ def detect_mode(df, start_date, end_date, context_days, force_reconstruct):
         return "RECONSTRUCT", "forced by --force-reconstruct"
 
     target_mask = (
-        (df['timestamp'].dt.date >= start_date.date()) &
-        (df['timestamp'].dt.date <= end_date.date())
+        (df['file_date'].dt.date >= start_date.date()) &
+        (df['file_date'].dt.date <= end_date.date())
     )
     if target_mask.sum() < 50:
         return "RECONSTRUCT", f"target has only {target_mask.sum()} rows (deleted)"
 
-    daily_counts  = df.groupby(df['timestamp'].dt.date)['RI'].count()
-    context_dates = pd.date_range(
-        start_date - timedelta(days=context_days),
-        start_date - timedelta(days=1), freq='D'
-    )
-    missing = [str(d.date()) for d in context_dates
-               if daily_counts.get(d.date(), 0) < 10]
-    if missing:
-        return ("RECONSTRUCT",
-                f"context missing days: [{', '.join(missing)}]")
-
-    return "VALIDATE", "target present and context intact"
+    # VALIDATE mode uses DSD physics features (n1-n20), NOT lag features.
+    # It does NOT need context days. If target data exists, always validate.
+    return "VALIDATE", "target data present"
 
 
 MODE, reason = detect_mode(
@@ -225,15 +242,20 @@ print(f"  Reason : {reason}")
 print(f"\n[TARGETS] Reading exact raw daily targets from {INPUT_FILE_RAW} ...")
 target_dates_str = [d.strftime('%Y-%m-%d') for d in pd.date_range(start_date, end_date)]
 try:
-    raw_df_iter = pd.read_csv(INPUT_FILE_RAW, chunksize=500000, usecols=['YYYY-MM-DD', 'RI [mm/h]'], dtype={'YYYY-MM-DD': str, 'RI [mm/h]': str})
+    raw_df_iter = pd.read_csv(INPUT_FILE_RAW, chunksize=500000,
+                              usecols=['YYYY-MM-DD', 'RI [mm/h]', 'source_file'],
+                              dtype={'YYYY-MM-DD': str, 'RI [mm/h]': str, 'source_file': str})
     raw_targets = {}
     for chunk in raw_df_iter:
-        chunk['YYYY-MM-DD'] = chunk['YYYY-MM-DD'].str.strip()
-        mask = chunk['YYYY-MM-DD'].isin(target_dates_str)
+        # Use file_date (from filename) instead of calendar date
+        fd_raw = chunk['source_file'].str.extract(r'RD-(\d{2})(\d{2})(\d{2})', expand=True)
+        chunk['file_date'] = '20' + fd_raw[0] + '-' + fd_raw[1] + '-' + fd_raw[2]
+        chunk.loc[fd_raw[0].isna(), 'file_date'] = None
+        mask = chunk['file_date'].isin(target_dates_str)
         if mask.any():
             match = chunk[mask].copy()
             match['RI [mm/h]'] = pd.to_numeric(match['RI [mm/h]'], errors='coerce')
-            for date_str, grp in match.groupby('YYYY-MM-DD'):
+            for date_str, grp in match.groupby('file_date'):
                 valid_ri = grp['RI [mm/h]'].dropna()
                 valid_ri = valid_ri[valid_ri > 0]  # Only consider rain rows!
                 if len(valid_ri) > 0:
@@ -303,8 +325,8 @@ if MODE == "VALIDATE":
 
     # Test: target date(s)
     target_mask = (
-        (df['timestamp'].dt.date >= start_date.date()) &
-        (df['timestamp'].dt.date <= end_date.date())
+        (df['file_date'].dt.date >= start_date.date()) &
+        (df['file_date'].dt.date <= end_date.date())
     )
     test_df = df[target_mask].copy()
     if len(test_df) == 0:
@@ -353,6 +375,13 @@ if MODE == "VALIDATE":
             
     y_pred = np.clip(y_pred, 0, 100)
 
+    # ── Winter Suppression (Dec, Jan, Feb — Kolkata dry season) ───
+    WINTER_MONTHS = {12, 1, 2}
+    winter_mask = test_df['file_date'].dt.month.isin(WINTER_MONTHS).values
+    if winter_mask.any():
+        y_pred[winter_mask] = 0.0
+        print(f"  Winter suppression: zeroed {winter_mask.sum()} intervals (Dec/Jan/Feb)")
+
     print(f"\n  Peak Correction [PGF]: x{pgf:.3f} (Adaptive)")
     print(f"  Storm Intervals Detected: {is_storm_pred.sum()} / {len(X_test)}")
     
@@ -387,7 +416,7 @@ if MODE == "VALIDATE":
     # ── 3-panel plot ──────────────────────────────────────────────
     fig, axes = plt.subplots(3, 1, figsize=(14, 14), facecolor=P['bg'], sharex=True)
     fig.suptitle(f'Hybrid Ensemble Prediction - {date_range_str}',
-                 fontsize=13, fontweight='bold', color=P['text'])
+                 fontsize=14, fontweight='bold', color=P['text'], y=0.98)
     ts = test_df['timestamp']
 
     axes[0].plot(ts, y_test, color=P['green'], linewidth=1.5, label='Actual RI', alpha=0.9)
@@ -416,8 +445,10 @@ if MODE == "VALIDATE":
         transform=axes[2].transAxes, color=P['text'], fontsize=9, va='top',
         bbox=dict(boxstyle='round,pad=0.4', facecolor=P['bg'], edgecolor=P['border']))
 
+    for ax in axes:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
     plt.xticks(rotation=30, ha='right')
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
     fname = f"validate_hybrid_{start_date.strftime('%Y%m%d')}.png"
     # plt.savefig(os.path.join(PLOT_DIR, fname), dpi=150, facecolor=P['bg']) # User: don't save automatically
     plt.show()
@@ -435,8 +466,8 @@ elif MODE == "RECONSTRUCT":
 
     # ── R1: History outside the gap ──────────────────────────────
     hist_df = df[
-        (df['timestamp'].dt.date < start_date.date()) |
-        (df['timestamp'].dt.date > end_date.date())
+        (df['file_date'].dt.date < start_date.date()) |
+        (df['file_date'].dt.date > end_date.date())
     ].copy()
 
     # ── R2: Daily aggregates from RAINY rows only ─────────────────
@@ -445,18 +476,18 @@ elif MODE == "RECONSTRUCT":
     # its true mean (~10 mm/h) not a diluted ~1.5 mm/h.
     rainy_hist = hist_df[hist_df['RI'] > 0].copy()
 
-    daily_rainy = rainy_hist.groupby(rainy_hist['timestamp'].dt.date).agg(
+    daily_rainy = rainy_hist.groupby(rainy_hist['file_date'].dt.date).agg(
         mean_RI  = ('RI', 'mean'),
         max_RI   = ('RI', 'max'),
         rain_pts = ('RI', 'count')
     ).reset_index()
-    daily_rainy.rename(columns={'timestamp': 'date'}, inplace=True)
+    daily_rainy.rename(columns={'file_date': 'date'}, inplace=True)
     daily_rainy['date'] = pd.to_datetime(daily_rainy['date'])
 
     # Fill fully-dry calendar days with 0
     full_range = pd.date_range(
-        hist_df['timestamp'].min().date(),
-        hist_df['timestamp'].max().date()
+        hist_df['file_date'].min().date(),
+        hist_df['file_date'].max().date()
     )
     daily = (daily_rainy.set_index('date')
                         .reindex(full_range)
@@ -607,6 +638,12 @@ elif MODE == "RECONSTRUCT":
 
         pred_pts = max(0, int(pts_model.predict(feat[DAILY_FEAT])[0]))
 
+        # ── Winter Suppression (Dec, Jan, Feb — Kolkata dry season) ──
+        if m in (12, 1, 2):
+            pred_mean = 0.0
+            pred_max  = 0.0
+            pred_pts  = 0
+
         predictions.append({
             'date'     : current_date,
             'pred_mean': pred_mean,
@@ -674,7 +711,7 @@ elif MODE == "RECONSTRUCT":
         best_day = cands.sort_values('score').iloc[0]['date']
 
         profile = hist_df[
-            hist_df['timestamp'].dt.date == best_day.date()
+            hist_df['file_date'].dt.date == best_day.date()
         ].copy()
         if len(profile) == 0:
             continue
@@ -712,6 +749,7 @@ elif MODE == "RECONSTRUCT":
               f'Rainfall RECONSTRUCTION — Hybrid Ensemble — {date_range_str}',
               f'Time', 'Rainfall Intensity (mm/h)')
         ax.set_ylim(bottom=0)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
         ax.legend(fontsize=9)
 
         for p in predictions:

@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import re
 
 INPUT_FILE  = "merged_data.csv"
 OUTPUT_FILE = "processed_data.csv"
@@ -65,6 +66,45 @@ else:
 df = df.dropna(subset=['timestamp'])
 df = df.sort_values('timestamp').reset_index(drop=True)
 print(f"  Valid timestamps  : {len(df):,}")
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 4B — EXTRACT FILE DATE (observation day from filename)
+# ─────────────────────────────────────────────────────────────────
+# The RD-80 creates one file per observation day: RD-YYMMDD-HHMMSS.csv
+# Each file spans ~24 hours starting from HHMMSS on that day.
+# The YYMMDD in the filename defines the canonical "observation day".
+# Data recorded after midnight still belongs to that file's day.
+print("\n[STEP 4B] Extracting file_date from source filenames ...")
+
+def parse_file_date(source_file):
+    """Extract observation date from RD-80 filename: RD-YYMMDD-HHMMSS.csv"""
+    m = re.search(r'RD-(\d{2})(\d{2})(\d{2})', str(source_file))
+    if m:
+        yy, mm, dd = m.groups()
+        return f"20{yy}-{mm}-{dd}"
+    return None
+
+df['file_date'] = df['source_file'].apply(parse_file_date)
+df['file_date'] = pd.to_datetime(df['file_date'], errors='coerce')
+
+n_null = df['file_date'].isna().sum()
+if n_null > 0:
+    print(f"  WARNING: {n_null} rows could not parse file_date — using timestamp date")
+    df.loc[df['file_date'].isna(), 'file_date'] = df.loc[df['file_date'].isna(), 'timestamp'].dt.normalize()
+
+print(f"  File dates range  : {df['file_date'].min().date()} to {df['file_date'].max().date()}")
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 4C — DEDUPLICATE OVERLAPPING TIMESTAMPS
+# ─────────────────────────────────────────────────────────────────
+# Consecutive files can overlap (tail of Day N extends into Day N+1).
+# Keep last occurrence (from the newer/primary file).
+print("\n[STEP 4C] Deduplicating overlapping timestamps ...")
+before_dedup = len(df)
+df = df.drop_duplicates(subset=['timestamp'], keep='last')
+df = df.sort_values('timestamp').reset_index(drop=True)
+deduped = before_dedup - len(df)
+print(f"  Removed {deduped:,} duplicate timestamps")
 
 # ─────────────────────────────────────────────────────────────────
 # STEP 5 — REMOVE TRULY EMPTY ROWS
