@@ -166,24 +166,6 @@ Mean DSD parameters were computed across four seasons:
 
 ---
 
-### 5. Machine Learning Model
-
-**Algorithm:** Random Forest Regression (Scikit-learn)
-
-```
-Input  (29 features):  n1–n20 drop counts + LWC + Dm + D_mean + Z + log_Z + hour + month
-                                          ↓
-                               Random Forest (200 trees)
-                               max_depth = 15, max_features = sqrt
-                                          ↓
-Output:  Rainfall Intensity (mm/h)
-```
-
-**Why Random Forest?**
-- Handles the nonlinear DSD → RI relationship naturally
-- Robust to sensor noise through ensemble averaging
-- Provides interpretable feature importance rankings
-- No scaling required for tree-based methods
 
 **Top 5 Features by Importance:**
 
@@ -347,7 +329,6 @@ University of Calcutta
 ## ⭐ Acknowledgements
 
 - RD-80 disdrometer data collected at the tropical monitoring station, Kolkata
-- NASA POWER MERRA-2 for regional precipitation validation data
 - Scikit-learn, NumPy, Pandas open-source communities
 
 ---
