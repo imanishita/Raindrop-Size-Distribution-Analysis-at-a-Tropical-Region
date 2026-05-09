@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
-import os
 warnings_imported = False
 try:
     import warnings
@@ -29,8 +28,6 @@ dDi = np.array([0.125,0.125,0.125,0.125,0.125,0.125,0.125,0.125,0.125,
                 0.500,0.500])
 
 N_COLS = [f'n{i}' for i in range(1, 21)]
-PLOT_DIR = "plots"
-os.makedirs(PLOT_DIR, exist_ok=True)
 
 P = {'bg':'#f8f9fa','panel':'#ffffff','border':'#dee2e6','text':'#1a1a2e',
      'sub':'#6c757d','blue':'#4361ee','red':'#f72585','green':'#2dc653',
@@ -198,10 +195,7 @@ style(ax2, 'Seasonal Z-R Relationships — Kolkata',
 ax2.legend(fontsize=8.5)
 
 plt.tight_layout()
-path = os.path.join(PLOT_DIR, 'zr_relationship.png')
-plt.savefig(path, dpi=150, bbox_inches='tight', facecolor=P['bg'])
-plt.close()
-print(f"  Saved: {path}")
+plt.show()
 
 # ─────────────────────────────────────────────────────────────────
 # FINAL REPORT

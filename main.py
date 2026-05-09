@@ -4,7 +4,7 @@ import os
 # -----------------------------
 # CONFIG
 # -----------------------------
-BASE_PATH = "data"   # main folder
+BASE_PATH = "data"   
 
 # -----------------------------
 # FUNCTION TO CONVERT

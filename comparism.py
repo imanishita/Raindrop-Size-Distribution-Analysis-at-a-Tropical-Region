@@ -36,7 +36,6 @@ print("Deriving instrument RI from cumulative column...")
 df['RI_instrument'] = df['RI'].diff().clip(lower=0) * 120
 df['RI_instrument'] = df['RI_instrument'].fillna(0)
 
-# Cap physically unrealistic values (> 300 mm/h is sensor noise)
 df.loc[df['RI_instrument'] > 300, 'RI_instrument'] = np.nan
 df['RI_instrument'] = df['RI_instrument'].fillna(0)
 
@@ -45,7 +44,6 @@ print(f"  Instrument RI — mean : {df[df['RI_instrument']>0]['RI_instrument'].m
 
 # ─────────────────────────────────────────────────────────────────
 # 2. COMPUTED RI FROM DSD
-#    FIX: Use F in cm² (not m²) so Di in mm gives mm/h directly
 # ─────────────────────────────────────────────────────────────────
 print("Computing RI from DSD drop counts...")
 drop_cols = [f'n{i}' for i in range(1, 21)]
@@ -59,11 +57,10 @@ else:
 t = np.where(t <= 0, 30, t)
 
 N      = df[drop_cols].values
-F_cm2  = F * 1e4                                  # 0.005 m² → 50 cm²
-factor = (np.pi / 6.0) * (3.6e3 / (F_cm2 * t))   # Di in mm → RI in mm/h
+F_cm2  = F * 1e4
+factor = (np.pi / 6.0) * (3.6e3 / (F_cm2 * t))
 df['RI_computed'] = factor * np.sum(N * (Di ** 3), axis=1)
 
-# Cap outliers
 df.loc[df['RI_computed'] > 300, 'RI_computed'] = np.nan
 df['RI_computed'] = df['RI_computed'].fillna(0)
 
@@ -81,7 +78,7 @@ df_daily = (df.set_index('timestamp')[['RI_instrument', 'RI_computed']]
 print(f"  Daily points  : {len(df_daily):,}")
 
 # ─────────────────────────────────────────────────────────────────
-# PLOT — TWO PANELS stacked
+# PLOT
 # ─────────────────────────────────────────────────────────────────
 print("Plotting comparison...")
 
@@ -100,7 +97,6 @@ for ax in axes:
     ax.set_ylim(bottom=0)
     ax.grid(True, alpha=0.35, linewidth=0.5)
 
-# ── Panel 1: Instrument RI ───────────────────────────────────────
 axes[0].plot(df_daily['timestamp'], df_daily['RI_instrument'],
              color='#4361ee', linewidth=0.8, alpha=0.85,
              label='Instrument RI (daily max)')
@@ -116,7 +112,6 @@ for year in range(2010, 2016):
                  str(year), ha='center', va='top',
                  fontsize=10, color='#555555', fontweight='bold')
 
-# ── Panel 2: Computed RI ─────────────────────────────────────────
 axes[1].plot(df_daily['timestamp'], df_daily['RI_computed'],
              color='#f72585', linewidth=0.8, alpha=0.85,
              label='Computed RI — DSD formula (daily max)')

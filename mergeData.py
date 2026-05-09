@@ -4,7 +4,7 @@ import os
 # -----------------------------
 # CONFIG
 # -----------------------------
-BASE_PATH = "data"   # your data folder
+BASE_PATH = "data"  
 OUTPUT_FILE = "merged_data.csv"
 
 # -----------------------------

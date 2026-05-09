@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
-import os
 
 try:
     import warnings
@@ -28,8 +27,6 @@ dDi = np.array([0.125,0.125,0.125,0.125,0.125,0.125,0.125,0.125,0.125,
                 0.500,0.500])
 
 N_COLS   = [f'n{i}' for i in range(1, 21)]
-PLOT_DIR = "plots"
-os.makedirs(PLOT_DIR, exist_ok=True)
 
 P = {'bg':'#f8f9fa','panel':'#ffffff','border':'#dee2e6','text':'#1a1a2e',
      'sub':'#6c757d','blue':'#4361ee','red':'#f72585','green':'#2dc653',
@@ -221,21 +218,10 @@ ax.legend(fontsize=9)
 # Ratio monsoon/post-monsoon if both exist
 ax2 = axes[1]
 if 'monsoon' in ND_season and 'post-monsoon' in ND_season:
-    nd_m = ND_season['monsoon']
-    nd_p = ND_season['post-monsoon']
-
-    # Only plot ratio where BOTH seasons have reliable data
-    # Threshold: N(D) must be > 1% of that season's peak value
-    min_threshold = max(nd_m.max(), nd_p.max()) * 0.01
-    valid = (nd_m > min_threshold) & (nd_p > min_threshold)
-
-    ratio = np.where(valid, nd_m / (nd_p + 1e-6), np.nan)
-
-    ax2.bar(Di[valid], ratio[valid], width=dDi[valid] * 0.6,
-            color=P['blue'], alpha=0.75,
+    ratio = ND_season['monsoon'] / (ND_season['post-monsoon'] + 1e-6)
+    ax2.bar(Di, ratio, width=dDi*0.6, color=P['blue'], alpha=0.75,
             label='Monsoon / Post-monsoon N(D) ratio')
     ax2.axhline(1.0, color='#555555', linestyle='--', linewidth=1.2)
-    ax2.set_xlim(0, Di[valid].max() + 0.3)
     style(ax2, 'N(D) Ratio: Monsoon vs Post-monsoon',
           'Drop Diameter D (mm)', 'N(D) ratio')
     ax2.legend(fontsize=9)
@@ -252,10 +238,7 @@ else:
 fig1.suptitle('Seasonal Drop Size Distribution — Kolkata (2010-2015)',
               fontsize=13, fontweight='bold', color=P['text'])
 plt.tight_layout()
-path1 = os.path.join(PLOT_DIR, 'seasonal_nd_curves.png')
-plt.savefig(path1, dpi=150, bbox_inches='tight', facecolor=P['bg'])
-plt.close()
-print(f"  Saved: {path1}")
+plt.show()
 
 # ── FIGURE 2: Monthly parameter trends ──────────────────────────
 fig2, axes2 = plt.subplots(2, 2, figsize=(15, 10), facecolor=P['bg'])
@@ -311,10 +294,7 @@ fig2.legend(handles=legend_handles, loc='lower center',
 fig2.suptitle('Monthly DSD Parameter Trends — Kolkata (2010-2015)',
               fontsize=13, fontweight='bold', color=P['text'])
 plt.tight_layout(rect=[0, 0.05, 1, 1])
-path2 = os.path.join(PLOT_DIR, 'seasonal_dsd_parameters.png')
-plt.savefig(path2, dpi=150, bbox_inches='tight', facecolor=P['bg'])
-plt.close()
-print(f"  Saved: {path2}")
+plt.show()
 
 # ── FIGURE 3: Dm vs log10(Z) scatter by season ──────────────────
 fig3, ax3 = plt.subplots(figsize=(10, 7), facecolor=P['bg'])
@@ -340,10 +320,7 @@ ax3.text(0.97, 0.05,
          'Stars = seasonal centroids',
          transform=ax3.transAxes, ha='right', fontsize=9, color=P['sub'])
 ax3.legend(fontsize=9, markerscale=1.5)
-path3 = os.path.join(PLOT_DIR, 'dm_vs_logZ_seasonal.png')
-plt.savefig(path3, dpi=150, bbox_inches='tight', facecolor=P['bg'])
-plt.close()
-print(f"  Saved: {path3}")
+plt.show()
 
 # ─────────────────────────────────────────────────────────────────
 # FINAL REPORT

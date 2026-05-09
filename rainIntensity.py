@@ -24,19 +24,32 @@ print(f"  Total rows loaded : {len(df):,}")
 # ─────────────────────────────────────────────────────────────────
 # FIX TIMESTAMP
 # ─────────────────────────────────────────────────────────────────
-print("Fixing timestamp...")
+# The 'timestamp' column has corrupt dates (1904/1905) for ~32 rows
+# due to RD-80 clock issues.  Use 'file_date' (from filenames) as
+# the authoritative date, combined with the time portion from timestamp.
+# ─────────────────────────────────────────────────────────────────
+print("Fixing timestamp using file_date …")
 df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-df = df.dropna(subset=['timestamp'])
+df['file_date'] = pd.to_datetime(df['file_date'], errors='coerce')
+df = df.dropna(subset=['file_date'])
+
+# Build corrected datetime:  file_date (correct day) + time-of-day from timestamp
+df['time_of_day'] = df['timestamp'].dt.time
+df['corrected_ts'] = df.apply(
+    lambda r: pd.Timestamp.combine(r['file_date'].date(), r['time_of_day'])
+    if pd.notna(r['time_of_day']) else r['file_date'],
+    axis=1
+)
 
 # Filter to valid year range
-df = df[(df['timestamp'].dt.year >= 2010) & (df['timestamp'].dt.year <= 2015)]
+df = df[(df['corrected_ts'].dt.year >= 2010) & (df['corrected_ts'].dt.year <= 2015)]
 
-# Sort and reset index — MUST reset so array positions stay aligned
-df = df.sort_values(by='timestamp').reset_index(drop=True)
+# Sort and reset index
+df = df.sort_values(by='corrected_ts').reset_index(drop=True)
 
 print(f"  Rows after filter : {len(df):,}")
-print(f"  Time range        : {df['timestamp'].min()}  to  {df['timestamp'].max()}")
-print(f"  Years present     : {sorted(df['timestamp'].dt.year.unique().tolist())}")
+print(f"  Time range        : {df['corrected_ts'].min()}  to  {df['corrected_ts'].max()}")
+print(f"  Years present     : {sorted(df['corrected_ts'].dt.year.unique().tolist())}")
 
 # ─────────────────────────────────────────────────────────────────
 # COMPUTE RAINFALL INTENSITY
@@ -50,8 +63,8 @@ else:
     for c in drop_cols:
         df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
 
-    if 'interval' in df.columns:
-        t = pd.to_numeric(df['interval'], errors='coerce').fillna(30).values
+    if 'Interval [s]' in df.columns:
+        t = pd.to_numeric(df['Interval [s]'], errors='coerce').fillna(30).values
     else:
         t = np.full(len(df), 30)
 
@@ -61,11 +74,10 @@ else:
 
 # ─────────────────────────────────────────────────────────────────
 # RESAMPLE TO HOURLY — covers ALL years, keeps plot clean
-# This replaces the N_POINTS=5000 slice which was cutting off data
 # ─────────────────────────────────────────────────────────────────
 print("Resampling to hourly for full 2010-2015 view...")
 
-df_hourly = (df.set_index('timestamp')['RI_plot']
+df_hourly = (df.set_index('corrected_ts')['RI_plot']
                .resample('1h').mean()
                .fillna(0)
                .reset_index())

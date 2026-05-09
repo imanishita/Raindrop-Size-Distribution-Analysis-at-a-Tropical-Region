@@ -70,10 +70,7 @@ print(f"  Valid timestamps  : {len(df):,}")
 # ─────────────────────────────────────────────────────────────────
 # STEP 4B — EXTRACT FILE DATE (observation day from filename)
 # ─────────────────────────────────────────────────────────────────
-# The RD-80 creates one file per observation day: RD-YYMMDD-HHMMSS.csv
-# Each file spans ~24 hours starting from HHMMSS on that day.
-# The YYMMDD in the filename defines the canonical "observation day".
-# Data recorded after midnight still belongs to that file's day.
+
 print("\n[STEP 4B] Extracting file_date from source filenames ...")
 
 def parse_file_date(source_file):
