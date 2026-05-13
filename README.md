@@ -1,12 +1,36 @@
-# 🌧️ Rain Drop Size Distribution Analysis & ML-Based Rainfall Prediction
-
 <div align="center">
+
+<!-- Animated Header Wave -->
+<a href="https://github.com">
+  <img width="100%" src="https://capsule-render.vercel.app/api?type=waving&color=4A90D9&height=200&section=header&text=🌧️%20Raindrop%20DSD%20Analysis&fontSize=52&fontColor=ffffff&fontAlignY=35&desc=ML-Based%20Rainfall%20Prediction%20·%20R²%20%3D%200.9995&descAlignY=60&descSize=20&animation=fadeIn" />
+</a>
+
+<br/>
+
+<!-- Animated Typing Banner -->
+<a href="https://git.io/typing-svg">
+  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=22&duration=3200&pause=1100&color=4A90D9&center=true&vCenter=true&multiline=false&repeat=true&width=780&lines=🌧️+Raindrop+Size+Distribution+Analysis;ML-Based+Rainfall+Prediction+%7C+R²+%3D+0.9995;RMSE+%3D+1.44+mm%2Fh+%7C+MAE+%3D+0.46+mm%2Fh;6+Years+·+313%2C856+Intervals+·+Kolkata;Final+Year+Project+·+Uni.+of+Calcutta" alt="DSD Analysis Typing SVG" />
+</a>
+
+<br/><br/>
 
 ![Python](https://img.shields.io/badge/Python-3.x-blue?style=for-the-badge&logo=python)
 ![Scikit-learn](https://img.shields.io/badge/Scikit--learn-ML-orange?style=for-the-badge&logo=scikit-learn)
 ![NumPy](https://img.shields.io/badge/NumPy-Data-green?style=for-the-badge&logo=numpy)
 ![Pandas](https://img.shields.io/badge/Pandas-Analysis-purple?style=for-the-badge&logo=pandas)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
+
+<br/>
+
+<!-- Key result highlight badges -->
+<img src="https://img.shields.io/badge/R²_Score-0.9995-brightgreen?style=flat-square&labelColor=0d1117"/>
+<img src="https://img.shields.io/badge/RMSE-1.44_mm%2Fh-4A90D9?style=flat-square&labelColor=0d1117"/>
+<img src="https://img.shields.io/badge/MAE-0.46_mm%2Fh-3776AB?style=flat-square&labelColor=0d1117"/>
+<img src="https://img.shields.io/badge/Dataset-313%2C856_intervals-orange?style=flat-square&labelColor=0d1117"/>
+<img src="https://img.shields.io/badge/Coverage-2010–2015-purple?style=flat-square&labelColor=0d1117"/>
+<img src="https://img.shields.io/badge/Location-Kolkata%2C_India-blue?style=flat-square&labelColor=0d1117"/>
+
+<br/><br/>
 
 **Final Year Project**
 
@@ -16,9 +40,13 @@
 
 *Manishita Biswas · Anik Khajanchi*
 
+<br/>
+
+<img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/colored.png" width="100%"/>
+
 </div>
 
----
+<br/>
 
 ## 📌 Overview
 
@@ -36,10 +64,10 @@ The project bridges **atmospheric physics** and **data science** — computing r
 - ✅ Compare Instrument RI vs Physics-computed RI
 - ✅ Engineer DSD-derived features: LWC, Dm, Z, log_Z
 - ✅ Analyse feature importance — confirming LWC and radar reflectivity Z as dominant predictors
-- ✅ **[NEW]** Derive Kolkata-specific Z-R relationships
-- ✅ **[NEW]** Classify Stratiform vs Convective rain using DSD thresholds
-- ✅ **[NEW]** Perform Seasonal DSD Variability Analysis (Monsoon, Pre-monsoon, etc.)
-- ⏳ Future-interval DSD parameter forecasting (Task 2 of ML Strategy)
+- ✅ Derive Kolkata-specific Z-R relationships
+- ✅ Classify Stratiform vs Convective rain using DSD thresholds
+- ✅ Perform Seasonal DSD Variability Analysis (Monsoon, Pre-monsoon, etc.)
+- ✅ Future-interval DSD parameter forecasting 
 
 ---
 
@@ -71,7 +99,9 @@ The **RD-80 is a piezoelectric acoustic disdrometer**. Raindrops fall onto a 50 
 
 ## ⚙️ Methodology
 
-### 1. Data Preprocessing
+<details>
+<summary><b>1. Data Preprocessing</b></summary>
+<br/>
 
 ```
 RD-80 .txt files (2010–2015)
@@ -89,9 +119,11 @@ RD-80 .txt files (2010–2015)
 - Removes sensor noise spikes (RI > 300 mm/h capped)
 - Deduplicates overlapping timestamps
 
----
+</details>
 
-### 2. Physics-Based Rainfall Intensity
+<details>
+<summary><b>2. Physics-Based Rainfall Intensity</b></summary>
+<br/>
 
 $$RI = \frac{\pi}{6} \cdot \frac{3.6 \times 10^3}{F_{cm^2} \cdot t} \sum_{i=1}^{20} n_i D_i^3$$
 
@@ -103,17 +135,21 @@ Where:
 
 **Key finding:** The instrument-recorded RI (mean 27.35 mm/h) differs from the physics-computed RI (mean 41.41 mm/h) due to known RD-80 piezoelectric membrane dead-time effects and internal smoothing — a documented sensor characteristic.
 
----
+</details>
 
-### 3. Drop Size Distribution
+<details>
+<summary><b>3. Drop Size Distribution</b></summary>
+<br/>
 
 $$N(D_i) = \frac{n_i}{F \cdot t \cdot v(D_i) \cdot \Delta D_i}$$
 
 Where $v(D_i)$ is the terminal fall velocity and $\Delta D_i$ is the bin width. This gives the number concentration of drops [m⁻³ mm⁻¹] — the fundamental quantity in rainfall microphysics.
 
----
+</details>
 
-### 4. Feature Engineering
+<details>
+<summary><b>4. Feature Engineering</b></summary>
+<br/>
 
 Beyond raw drop counts, the following physics-derived features were engineered:
 
@@ -125,13 +161,18 @@ Beyond raw drop counts, the following physics-derived features were engineered:
 | `log_Z` | $\log(1 + Z)$ | Log-transform for heavy-tailed Z |
 | `total_drops` | $\sum n_i$ | Total drop count |
 
+</details>
+
 ---
 
 ## 🧪 Advanced Research Findings (Part 1)
 
 Based on recent research, the following three advanced analyses have been implemented on the Kolkata RD-80 dataset:
 
-### 1. Kolkata-specific Z-R Relationship
+<details>
+<summary><b>1. Kolkata-specific Z-R Relationship</b></summary>
+<br/>
+
 We derived the radar reflectivity ($Z$) vs rain rate ($R$) relationship ($Z = A \cdot R^b$) from actual tropical data:
 
 *   **Kolkata (Computed):** $Z = 0.75 \times R^{1.317}$
@@ -139,7 +180,12 @@ We derived the radar reflectivity ($Z$) vs rain rate ($R$) relationship ($Z = A 
 
 **Finding:** The lower intercept ($0.75$) in Kolkata means that for the same rain rate, Kolkata drops produce significantly less radar reflectivity than the global average. This is because tropical drops in this region are smaller on average ($D_m \approx 0.98$ mm during monsoon). Since $Z \propto D^6$, small drops lead to much lower $Z$.
 
-### 2. Stratiform vs Convective Rain Classification
+</details>
+
+<details>
+<summary><b>2. Stratiform vs Convective Rain Classification</b></summary>
+<br/>
+
 Rain intervals were classified using a rain rate threshold ($R < 10$ mm/h = stratiform, $R \geq 10$ mm/h = convective):
 
 *   **Stratiform:** 79,692 intervals (38.0%)
@@ -149,7 +195,12 @@ Rain intervals were classified using a rain rate threshold ($R < 10$ mm/h = stra
 *   **Stratiform Fit:** $Z = 0.84 \times R^{1.24}$
 *   **Convective Fit:** $Z = 0.69 \times R^{1.34}$
 
-### 3. Seasonal DSD Analysis
+</details>
+
+<details>
+<summary><b>3. Seasonal DSD Analysis</b></summary>
+<br/>
+
 Mean DSD parameters were computed across four seasons:
 
 | Season | Rain Rate ($R$) | $D_m$ | LWC |
@@ -161,10 +212,9 @@ Mean DSD parameters were computed across four seasons:
 
 **Key Observation:** Pre-monsoon drops are the largest ($D_m = 1.10$ mm) despite not being the highest rain rate season, consistent with the convective nature of Kalbaisakhi thunderstorms.
 
----
+</details>
 
 ---
-
 
 **Top 5 Features by Importance:**
 
@@ -232,11 +282,13 @@ RAINDROP ANALYSIS/
 ## 🚀 Getting Started
 
 ### Prerequisites
+
 ```bash
 pip install numpy pandas matplotlib scikit-learn
 ```
 
 ### Run the Full Pipeline
+
 ```bash
 # Step 1: Merge all yearly RD-80 .txt files into one dataset
 python mergeData.py
@@ -278,19 +330,27 @@ python main.py
 
 The machine learning approach is being pivoted to solve more physically meaningful tasks that cannot be solved by direct mathematical formulas:
 
-### Task 1: Rain Type Classification
+<details>
+<summary><b>Task 1: Rain Type Classification</b></summary>
+<br/>
+
 *   **Goal:** Predict whether a 30-second interval is **Stratiform** or **Convective** given DSD features ($n_1$–$n_{20}$, LWC, $Z$, $D_m$).
 *   **Why:** This is a genuine classification problem that simple physics formulas cannot solve directly.
 
-### Task 2: Next-interval DSD Parameter Forecasting
+</details>
+
+<details>
+<summary><b>Task 2: Next-interval DSD Parameter Forecasting</b></summary>
+<br/>
+
 *   **Goal:** Predict future state ($D_m, Z, LWC$ at time $t+1$) given current state at time $t$.
-*   **Why:** Forecasting the future cannot be computed from current measurements using physics. 
+*   **Why:** Forecasting the future cannot be computed from current measurements using physics.
 *   **Training:** 2010–2014 data.
 *   **Testing:** 2015 data.
 
-### Additional Extensions
-- Integration with NASA POWER satellite precipitation data for regional validation.
-- Real-time flood early warning system integration using the forecasting model.
+</details>
+
+
 
 ---
 
@@ -318,10 +378,15 @@ The machine learning approach is being pivoted to solve more physically meaningf
 
 ## 👩‍💻 Authors
 
-**Manishita Biswas** · **Anik Khajanchi**
+<div align="center">
 
-B.Tech — Electronics & Communication Engineering
-University of Calcutta
+<img src="https://img.shields.io/badge/Manishita_Biswas-B.Tech_ECE-4A90D9?style=for-the-badge&labelColor=0d1117"/>
+<img src="https://img.shields.io/badge/Anik_Khajanchi-B.Tech_ECE-4A90D9?style=for-the-badge&labelColor=0d1117"/>
+
+**B.Tech — Electronics & Communication Engineering**
+**University of Calcutta**
+
+</div>
 
 ---
 
@@ -333,5 +398,18 @@ University of Calcutta
 ---
 
 <div align="center">
+
+<img src="https://raw.githubusercontent.com/andreasbm/readme/master/assets/lines/colored.png" width="100%"/>
+
+<img src="https://img.shields.io/badge/Physics_meets_ML-R²_=_0.9995-4A90D9?style=for-the-badge&labelColor=0d1117"/>
+
+<br/><br/>
+
 If you found this project useful, please consider giving it a ⭐
+
+<!-- Animated Footer Wave -->
+<a href="https://github.com">
+  <img width="100%" src="https://capsule-render.vercel.app/api?type=waving&color=4A90D9&height=120&section=footer&animation=fadeIn" />
+</a>
+
 </div>
